@@ -174,7 +174,6 @@ class AuditLog(
     store_number: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
-        index=True,
         comment="Номер ТТ, якщо дія стосується магазину",
     )
 
