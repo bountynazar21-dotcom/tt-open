@@ -25,6 +25,7 @@ dependencies = [
     # Database
     "SQLAlchemy>=2.0.51,<3",
     "asyncpg>=0.30,<1",
+    "psycopg[binary]>=3.2,<4",
     "alembic>=1.16,<2",
     "greenlet>=3.2,<4",
 
