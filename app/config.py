@@ -22,13 +22,77 @@ from pydantic_settings import (
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+# =========================================================
+# HELPERS
+# =========================================================
+
 def empty_string_to_none(value: object) -> object:
-    """Перетворює порожні значення з .env на None."""
+    """
+    Перетворює порожній рядок зі змінних
+    середовища на None.
+    """
 
     if isinstance(value, str) and not value.strip():
         return None
 
     return value
+
+
+def normalize_async_database_url(value: str) -> str:
+    """
+    Railway зазвичай повертає:
+
+    postgresql://...
+
+    Для SQLAlchemy AsyncEngine потрібен:
+
+    postgresql+asyncpg://...
+    """
+
+    url = value.strip()
+
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+
+    if url.startswith("postgresql://"):
+        url = (
+            "postgresql+asyncpg://"
+            + url[len("postgresql://"):]
+        )
+
+    if url.startswith("postgresql+psycopg://"):
+        url = (
+            "postgresql+asyncpg://"
+            + url[len("postgresql+psycopg://"):]
+        )
+
+    return url
+
+
+def normalize_sync_database_url(value: str) -> str:
+    """
+    Перетворює PostgreSQL URL
+    у синхронний формат для Alembic.
+    """
+
+    url = value.strip()
+
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+
+    if url.startswith("postgresql+asyncpg://"):
+        return (
+            "postgresql+psycopg://"
+            + url[len("postgresql+asyncpg://"):]
+        )
+
+    if url.startswith("postgresql://"):
+        return (
+            "postgresql+psycopg://"
+            + url[len("postgresql://"):]
+        )
+
+    return url
 
 
 OptionalInt = Annotated[
@@ -42,12 +106,19 @@ OptionalString = Annotated[
 ]
 
 
+# =========================================================
+# SETTINGS
+# =========================================================
+
 class Settings(BaseSettings):
     """
-    Головні налаштування застосунку.
+    Головні налаштування Chikin Bot.
 
-    Значення завантажуються зі змінних середовища
-    та файлу .env у корені проєкту.
+    Локально:
+        .env
+
+    Railway:
+        Variables
     """
 
     model_config = SettingsConfigDict(
@@ -55,11 +126,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        env_ignore_empty=True,
     )
 
-    # ==========================================
+    # =====================================================
     # TELEGRAM
-    # ==========================================
+    # =====================================================
 
     bot_token: SecretStr
     bot_username: str
@@ -71,42 +143,35 @@ class Settings(BaseSettings):
         default_factory=list,
     )
 
-    # ==========================================
+    # =====================================================
     # TELEGRAM REPORT GROUP
-    # ==========================================
+    # =====================================================
 
-    # Одна Telegram-група,
-    # всередині якої знаходяться Topics звітів.
     report_group_chat_id: OptionalInt = None
 
-    # Вінниця
     report_topic_vinnytsia: OptionalInt = None
 
-    # Хмельницький — перша частина
     report_topic_khmelnytskyi_1: OptionalInt = None
 
-    # Хмельницький — друга частина
     report_topic_khmelnytskyi_2: OptionalInt = None
 
-    # Генеральний Topic.
-    # Сюди надходитиме сумарна каса всієї мережі.
     network_cash_topic_id: OptionalInt = None
 
-    # ==========================================
+    # =====================================================
     # LEGACY CLOSING GROUP
-    # ==========================================
+    # =====================================================
 
-    # Залишаємо для сумісності
-    # з уже написаними service/handler.
     closing_group_id: OptionalInt = None
+
     closing_group_topic_id: OptionalInt = None
 
-    # ==========================================
+    # =====================================================
     # DATABASE
-    # ==========================================
+    # =====================================================
 
     database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/chikin_bot"
+        "postgresql+asyncpg://"
+        "postgres:postgres@localhost:5432/chikin_bot"
     )
 
     database_sync_url: OptionalString = None
@@ -131,9 +196,9 @@ class Settings(BaseSettings):
         le=300,
     )
 
-    # ==========================================
+    # =====================================================
     # APPLICATION
-    # ==========================================
+    # =====================================================
 
     app_name: str = "Chikin Bot"
 
@@ -160,16 +225,18 @@ class Settings(BaseSettings):
 
     debug: bool = False
 
-    # ==========================================
+    # =====================================================
     # BOT MODE
-    # ==========================================
+    # =====================================================
 
     use_webhook: bool = False
 
     app_base_url: OptionalString = None
+
     webhook_url: OptionalString = None
 
     webhook_path: str = "/webhook"
+
     webhook_secret: OptionalString = None
 
     web_server_host: str = "0.0.0.0"
@@ -184,11 +251,12 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ==========================================
-    # REGISTRATION AND ACCESS
-    # ==========================================
+    # =====================================================
+    # REGISTRATION / ACCESS
+    # =====================================================
 
     require_store_approval: bool = True
+
     allow_multiple_store_users: bool = True
 
     default_invite_expiration_hours: int = Field(
@@ -203,9 +271,9 @@ class Settings(BaseSettings):
         le=10_000,
     )
 
-    # ==========================================
+    # =====================================================
     # OPENING CHECK-IN
-    # ==========================================
+    # =====================================================
 
     enable_opening_reminders: bool = True
 
@@ -233,9 +301,9 @@ class Settings(BaseSettings):
         le=3600,
     )
 
-    # ==========================================
-    # CLOSING REPORTS
-    # ==========================================
+    # =====================================================
+    # CLOSING
+    # =====================================================
 
     enable_closing_reminders: bool = True
 
@@ -258,9 +326,9 @@ class Settings(BaseSettings):
 
     require_receipt_photo: bool = True
 
-    # ==========================================
+    # =====================================================
     # REPORTS
-    # ==========================================
+    # =====================================================
 
     reports_directory: Path = Path(
         "storage/reports"
@@ -274,11 +342,12 @@ class Settings(BaseSettings):
 
     network_name: str = "Soska Bar"
 
-    # ==========================================
+    # =====================================================
     # SECURITY
-    # ==========================================
+    # =====================================================
 
     secret_key: SecretStr
+
     invite_token_salt: SecretStr
 
     rate_limit_requests_per_minute: int = Field(
@@ -287,9 +356,9 @@ class Settings(BaseSettings):
         le=10_000,
     )
 
-    # ==========================================
+    # =====================================================
     # SCHEDULER LOCK
-    # ==========================================
+    # =====================================================
 
     enable_scheduler_lock: bool = True
 
@@ -298,9 +367,9 @@ class Settings(BaseSettings):
         ge=1,
     )
 
-    # ==========================================
-    # VALIDATORS
-    # ==========================================
+    # =====================================================
+    # ROOT ADMINS
+    # =====================================================
 
     @field_validator(
         "root_admin_ids",
@@ -311,28 +380,15 @@ class Settings(BaseSettings):
         cls,
         value: object,
     ) -> list[int]:
-        """
-        Підтримує формат:
-
-        ROOT_ADMIN_IDS=123456789
-        ROOT_ADMIN_IDS=123456789,987654321
-        """
 
         if value is None:
             return []
 
-        if isinstance(
-            value,
-            int,
-        ):
-            return [
-                value
-            ]
+        if isinstance(value, int):
+            return [value]
 
-        if isinstance(
-            value,
-            str,
-        ):
+        if isinstance(value, str):
+
             value = value.strip()
 
             if not value:
@@ -383,6 +439,10 @@ class Settings(BaseSettings):
             "Непідтримуваний формат ROOT_ADMIN_IDS."
         )
 
+    # =====================================================
+    # BOT USERNAME
+    # =====================================================
+
     @field_validator(
         "bot_username"
     )
@@ -391,9 +451,6 @@ class Settings(BaseSettings):
         cls,
         value: str,
     ) -> str:
-        """
-        Прибирає @ на початку username.
-        """
 
         username = (
             value
@@ -408,6 +465,40 @@ class Settings(BaseSettings):
 
         return username
 
+    # =====================================================
+    # DATABASE
+    # =====================================================
+
+    @field_validator(
+        "database_url",
+        mode="before",
+    )
+    @classmethod
+    def validate_database_url(
+        cls,
+        value: object,
+    ) -> str:
+
+        if value is None:
+            raise ValueError(
+                "DATABASE_URL не може бути порожнім."
+            )
+
+        url = str(value).strip()
+
+        if not url:
+            raise ValueError(
+                "DATABASE_URL не може бути порожнім."
+            )
+
+        return normalize_async_database_url(
+            url
+        )
+
+    # =====================================================
+    # WEBHOOK
+    # =====================================================
+
     @field_validator(
         "webhook_path"
     )
@@ -416,17 +507,14 @@ class Settings(BaseSettings):
         cls,
         value: str,
     ) -> str:
+
         path = value.strip()
 
         if not path:
             return "/webhook"
 
-        if not path.startswith(
-            "/"
-        ):
-            path = (
-                f"/{path}"
-            )
+        if not path.startswith("/"):
+            path = f"/{path}"
 
         return path
 
@@ -438,6 +526,7 @@ class Settings(BaseSettings):
         cls,
         value: str | None,
     ) -> str | None:
+
         if value is None:
             return None
 
@@ -458,9 +547,14 @@ class Settings(BaseSettings):
         cls,
         value: object,
     ) -> object:
+
         return empty_string_to_none(
             value
         )
+
+    # =====================================================
+    # OPTIONAL INTEGER VALUES
+    # =====================================================
 
     @field_validator(
         "report_group_chat_id",
@@ -477,9 +571,14 @@ class Settings(BaseSettings):
         cls,
         value: object,
     ) -> object:
+
         return empty_string_to_none(
             value
         )
+
+    # =====================================================
+    # REPORT DIRECTORY
+    # =====================================================
 
     @field_validator(
         "reports_directory",
@@ -490,6 +589,7 @@ class Settings(BaseSettings):
         cls,
         value: object,
     ) -> Path:
+
         path = Path(
             str(value)
         )
@@ -502,49 +602,67 @@ class Settings(BaseSettings):
             / path
         )
 
-    # ==========================================
-    # MODEL VALIDATION
-    # ==========================================
+    # =====================================================
+    # FINAL MODEL VALIDATION
+    # =====================================================
 
     @model_validator(
         mode="after"
     )
-    def validate_webhook_settings(
+    def validate_settings(
         self,
     ) -> Settings:
-        """
-        Перевіряє налаштування webhook.
-        """
+
+        # -----------------------------
+        # DATABASE SYNC URL
+        # -----------------------------
+
+        if self.database_sync_url:
+            self.database_sync_url = (
+                normalize_sync_database_url(
+                    self.database_sync_url
+                )
+            )
+
+        else:
+            self.database_sync_url = (
+                normalize_sync_database_url(
+                    self.database_url
+                )
+            )
+
+        # -----------------------------
+        # WEBHOOK
+        # -----------------------------
 
         if self.use_webhook:
+
             if (
                 not self.webhook_url
                 and not self.app_base_url
             ):
                 raise ValueError(
-                    "Для USE_WEBHOOK=true потрібно вказати "
-                    "WEBHOOK_URL або APP_BASE_URL."
+                    "Для USE_WEBHOOK=true потрібно "
+                    "вказати WEBHOOK_URL "
+                    "або APP_BASE_URL."
                 )
 
             if not self.webhook_secret:
                 raise ValueError(
-                    "Для webhook-режиму потрібно вказати "
-                    "WEBHOOK_SECRET."
+                    "Для webhook-режиму потрібно "
+                    "вказати WEBHOOK_SECRET."
                 )
 
         return self
 
-    # ==========================================
-    # TELEGRAM PROPERTIES
-    # ==========================================
+    # =====================================================
+    # TELEGRAM
+    # =====================================================
 
     @property
     def telegram_webhook_url(
         self,
     ) -> str | None:
-        """
-        Повна адреса Telegram webhook.
-        """
 
         if self.webhook_url:
             return (
@@ -564,35 +682,22 @@ class Settings(BaseSettings):
     def bot_link(
         self,
     ) -> str:
-        """
-        Публічне посилання на Telegram-бота.
-        """
 
         return (
             f"https://t.me/"
             f"{self.bot_username}"
         )
 
-    # ==========================================
-    # REPORT GROUP PROPERTIES
-    # ==========================================
+    # =====================================================
+    # REPORT TOPICS
+    # =====================================================
 
     @property
     def report_topics(
         self,
     ) -> dict[str, int]:
-        """
-        Робочі Topics для окремих
-        частин мережі.
 
-        Порожні значення автоматично
-        не потрапляють у словник.
-        """
-
-        topics: dict[
-            str,
-            int,
-        ] = {}
+        topics: dict[str, int] = {}
 
         if (
             self.report_topic_vinnytsia
@@ -600,9 +705,7 @@ class Settings(BaseSettings):
         ):
             topics[
                 "vinnytsia"
-            ] = (
-                self.report_topic_vinnytsia
-            )
+            ] = self.report_topic_vinnytsia
 
         if (
             self.report_topic_khmelnytskyi_1
@@ -630,9 +733,6 @@ class Settings(BaseSettings):
     def report_topic_ids(
         self,
     ) -> tuple[int, ...]:
-        """
-        IDs усіх робочих report Topics.
-        """
 
         return tuple(
             self.report_topics.values()
@@ -642,16 +742,6 @@ class Settings(BaseSettings):
     def effective_closing_group_id(
         self,
     ) -> int | None:
-        """
-        Основна група для closing/report
-        повідомлень.
-
-        Новий REPORT_GROUP_CHAT_ID
-        має пріоритет.
-
-        CLOSING_GROUP_ID залишається
-        fallback для старого коду.
-        """
 
         return (
             self.report_group_chat_id
@@ -662,10 +752,6 @@ class Settings(BaseSettings):
     def has_report_group(
         self,
     ) -> bool:
-        """
-        Чи налаштована Telegram-група
-        для звітів.
-        """
 
         return (
             self.report_group_chat_id
@@ -676,10 +762,6 @@ class Settings(BaseSettings):
     def has_network_cash_topic(
         self,
     ) -> bool:
-        """
-        Чи налаштована генеральна гілка
-        для сумарної каси.
-        """
 
         return (
             self.report_group_chat_id
@@ -688,14 +770,15 @@ class Settings(BaseSettings):
             is not None
         )
 
-    # ==========================================
-    # ENVIRONMENT PROPERTIES
-    # ==========================================
+    # =====================================================
+    # ENVIRONMENT
+    # =====================================================
 
     @property
     def is_development(
         self,
     ) -> bool:
+
         return (
             self.app_env
             == "development"
@@ -705,6 +788,7 @@ class Settings(BaseSettings):
     def is_testing(
         self,
     ) -> bool:
+
         return (
             self.app_env
             == "testing"
@@ -714,39 +798,33 @@ class Settings(BaseSettings):
     def is_production(
         self,
     ) -> bool:
+
         return (
             self.app_env
             == "production"
         )
 
-    # ==========================================
+    # =====================================================
     # ADMIN
-    # ==========================================
+    # =====================================================
 
     def is_root_admin(
         self,
         telegram_id: int,
     ) -> bool:
-        """
-        Перевіряє роль головного
-        адміністратора.
-        """
 
         return (
             telegram_id
             in self.root_admin_ids
         )
 
-    # ==========================================
+    # =====================================================
     # DIRECTORIES
-    # ==========================================
+    # =====================================================
 
     def create_required_directories(
         self,
     ) -> None:
-        """
-        Створює службові папки.
-        """
 
         self.reports_directory.mkdir(
             parents=True,
@@ -754,13 +832,14 @@ class Settings(BaseSettings):
         )
 
 
+# =========================================================
+# SETTINGS INSTANCE
+# =========================================================
+
 @lru_cache(
     maxsize=1
 )
 def get_settings() -> Settings:
-    """
-    Створює і повертає налаштування.
-    """
 
     app_settings = Settings()
 
