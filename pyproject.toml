@@ -1,0 +1,143 @@
+[build-system]
+requires = [
+    "setuptools>=75.0",
+    "wheel>=0.45",
+]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "chikin-bot"
+version = "0.1.0"
+description = "Telegram bot for store opening, closing and cash reporting"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+authors = [
+    { name = "Soska Bar" }
+]
+
+dependencies = [
+    # Telegram Bot
+    "aiogram>=3.29,<4",
+
+    # Database
+    "SQLAlchemy>=2.0.51,<3",
+    "asyncpg>=0.30,<1",
+    "alembic>=1.16,<2",
+    "greenlet>=3.2,<4",
+
+    # Settings and validation
+    "pydantic>=2.12,<3",
+    "pydantic-settings>=2.14,<3",
+    "python-dotenv>=1.1,<2",
+
+    # API and health check
+    "fastapi>=0.139,<1",
+    "uvicorn[standard]>=0.34,<1",
+    "python-multipart>=0.0.20,<1",
+
+    # Scheduler
+    "APScheduler>=3.11,<4",
+
+    # Excel reports
+    "openpyxl>=3.1,<4",
+
+    # File operations
+    "aiofiles>=24.1,<25",
+
+    # Timezone database for Windows and Docker
+    "tzdata>=2026.1",
+]
+
+
+[project.optional-dependencies]
+dev = [
+    # Tests
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.0,<2",
+    "pytest-cov>=6.2,<7",
+
+    # Code quality
+    "ruff>=0.12,<1",
+    "mypy>=1.16,<2",
+]
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+
+markers = [
+    "unit: unit tests",
+    "integration: integration tests",
+]
+
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [
+    "alembic/versions",
+]
+
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "B",
+    "UP",
+    "ASYNC",
+]
+ignore = [
+    "B008",
+]
+
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+
+[tool.mypy]
+python_version = "3.12"
+plugins = [
+    "pydantic.mypy",
+]
+
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+exclude = [
+    "alembic/",
+]
+
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
