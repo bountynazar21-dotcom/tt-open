@@ -7,7 +7,12 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.config import settings
+from app.database.session import async_session_factory
 from app.handlers import get_handlers_router
+from app.middlewares import (
+    DatabaseMiddleware,
+    AuthMiddleware,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -39,18 +44,34 @@ def create_bot() -> Bot:
 
 def create_dispatcher() -> Dispatcher:
     """
-    Створює Dispatcher
-    та підключає всі handlers.
+    ??????? Dispatcher ?? ????????? middleware ? handlers.
     """
 
     dispatcher = Dispatcher()
+
+    # ??????? ????????:
+    # DatabaseMiddleware ???????? ??????? session/repositories/services,
+    # ????? ????? AuthMiddleware ????????? ??? ??????? ???????????.
+    dispatcher.update.outer_middleware(
+        DatabaseMiddleware(
+            async_session_factory,
+            bot_username=settings.bot_username,
+        )
+    )
+
+    dispatcher.update.outer_middleware(
+        AuthMiddleware(
+            auto_create_users=True,
+            update_profile=True,
+            allow_anonymous_updates=True,
+        )
+    )
 
     dispatcher.include_router(
         get_handlers_router()
     )
 
     return dispatcher
-
 
 def get_bot_and_dispatcher() -> tuple[
     Bot,
