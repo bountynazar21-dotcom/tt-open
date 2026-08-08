@@ -169,10 +169,7 @@ class Settings(BaseSettings):
     # DATABASE
     # =====================================================
 
-    database_url: str = (
-        "postgresql+asyncpg://"
-        "postgres:postgres@localhost:5432/chikin_bot"
-    )
+    database_url: str
 
     database_sync_url: OptionalString = None
 
