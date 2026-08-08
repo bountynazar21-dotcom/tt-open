@@ -93,6 +93,10 @@ class User(
             name="user_role",
             native_enum=True,
             validate_strings=True,
+            values_callable=lambda enum_class: [
+                item.value
+                for item in enum_class
+            ],
         ),
         nullable=False,
         default=UserRole.STORE_USER,
@@ -106,6 +110,10 @@ class User(
             name="user_status",
             native_enum=True,
             validate_strings=True,
+            values_callable=lambda enum_class: [
+                item.value
+                for item in enum_class
+            ],
         ),
         nullable=False,
         default=UserStatus.PENDING,
