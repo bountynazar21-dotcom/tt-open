@@ -3634,28 +3634,6 @@ async def unknown_invite_ui_callback(
 
 
 # =========================================================
-# UNKNOWN LEGACY
-# =========================================================
-
-
-@router.callback_query(
-    InviteCallback.filter()
-)
-async def unknown_invite_callback(
-    callback: CallbackQuery,
-) -> None:
-    """
-    Legacy fallback.
-    """
-
-    await callback.answer(
-        "Цей invite-елемент "
-        "ще не підключений.",
-        show_alert=False,
-    )
-
-
-# =========================================================
 # EXPORTS
 # =========================================================
 

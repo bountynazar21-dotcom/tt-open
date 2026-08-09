@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 
@@ -33,14 +33,14 @@ _dispatcher: Dispatcher | None = None
 
 def create_bot() -> Bot:
     """
-    Створює Telegram Bot.
+    РЎС‚РІРѕСЂСЋС” Telegram Bot.
     """
 
     token = settings.bot_token.get_secret_value()
 
     if not token:
         raise RuntimeError(
-            "BOT_TOKEN не заданий."
+            "BOT_TOKEN РЅРµ Р·Р°РґР°РЅРёР№."
         )
 
     return Bot(
@@ -58,34 +58,34 @@ def create_bot() -> Bot:
 
 def create_dispatcher() -> Dispatcher:
     """
-    Створює Dispatcher та підключає
-    middleware у правильному порядку.
+    РЎС‚РІРѕСЂСЋС” Dispatcher С‚Р° РїС–РґРєР»СЋС‡Р°С”
+    middleware Сѓ РїСЂР°РІРёР»СЊРЅРѕРјСѓ РїРѕСЂСЏРґРєСѓ.
 
-    Порядок:
+    РџРѕСЂСЏРґРѕРє:
 
     Error
-        ↓
+        в†“
     Logging
-        ↓
+        в†“
     Throttling
-        ↓
+        в†“
     Database
-        ↓
+        в†“
     Auth
-        ↓
+        в†“
     Access
-        ↓
+        в†“
     Handlers
 
-    Важливо:
-    DatabaseMiddleware знаходиться зовні
-    від Auth/Access, тому вони вже мають
+    Р’Р°Р¶Р»РёРІРѕ:
+    DatabaseMiddleware Р·РЅР°С…РѕРґРёС‚СЊСЃСЏ Р·РѕРІРЅС–
+    РІС–Рґ Auth/Access, С‚РѕРјСѓ РІРѕРЅРё РІР¶Рµ РјР°СЋС‚СЊ
     session/repositories/services.
 
-    ErrorHandler знаходиться зовні Database,
-    тому exception спочатку доходить до DB,
-    де виконується rollback, і тільки після
-    цього перехоплюється глобальним handler.
+    ErrorHandler Р·РЅР°С…РѕРґРёС‚СЊСЃСЏ Р·РѕРІРЅС– Database,
+    С‚РѕРјСѓ exception СЃРїРѕС‡Р°С‚РєСѓ РґРѕС…РѕРґРёС‚СЊ РґРѕ DB,
+    РґРµ РІРёРєРѕРЅСѓС”С‚СЊСЃСЏ rollback, С– С‚С–Р»СЊРєРё РїС–СЃР»СЏ
+    С†СЊРѕРіРѕ РїРµСЂРµС…РѕРїР»СЋС”С‚СЊСЃСЏ РіР»РѕР±Р°Р»СЊРЅРёРј handler.
     """
 
     dispatcher = Dispatcher()
@@ -144,7 +144,7 @@ def create_dispatcher() -> Dispatcher:
         AuthMiddleware(
             auto_create_users=True,
             update_profile=True,
-            block_inactive_users=True,
+            block_inactive_users=False,
             allow_anonymous_updates=True,
         )
     )
@@ -184,7 +184,7 @@ def get_bot_and_dispatcher() -> tuple[
     Dispatcher,
 ]:
     """
-    Повертає один екземпляр Bot + Dispatcher.
+    РџРѕРІРµСЂС‚Р°С” РѕРґРёРЅ РµРєР·РµРјРїР»СЏСЂ Bot + Dispatcher.
     """
 
     global _bot
@@ -209,7 +209,7 @@ def get_bot_and_dispatcher() -> tuple[
 
 async def run_polling() -> None:
     """
-    Запускає Telegram bot через polling.
+    Р—Р°РїСѓСЃРєР°С” Telegram bot С‡РµСЂРµР· polling.
     """
 
     bot, dispatcher = (
@@ -224,8 +224,8 @@ async def run_polling() -> None:
         me.id,
     )
 
-    # Якщо раніше використовувався webhook,
-    # прибираємо його перед polling.
+    # РЇРєС‰Рѕ СЂР°РЅС–С€Рµ РІРёРєРѕСЂРёСЃС‚РѕРІСѓРІР°РІСЃСЏ webhook,
+    # РїСЂРёР±РёСЂР°С”РјРѕ Р№РѕРіРѕ РїРµСЂРµРґ polling.
     await bot.delete_webhook(
         drop_pending_updates=False,
     )
@@ -253,7 +253,7 @@ async def run_polling() -> None:
 
 async def shutdown_bot() -> None:
     """
-    Коректно закриває Telegram HTTP session.
+    РљРѕСЂРµРєС‚РЅРѕ Р·Р°РєСЂРёРІР°С” Telegram HTTP session.
     """
 
     global _bot
