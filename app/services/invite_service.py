@@ -70,6 +70,22 @@ class InviteCreationServiceResult:
             self.created_invite
         )
 
+    @property
+    def success(self) -> bool:
+        """
+        Compatibility flag для handlers.
+        """
+
+        return True
+
+    @property
+    def created(self) -> bool:
+        """
+        Compatibility alias.
+        """
+
+        return True
+
 
 @dataclass(slots=True, frozen=True)
 class InviteActivationServiceResult:
@@ -92,6 +108,22 @@ class InviteActivationServiceResult:
 
     message: str
 
+    @property
+    def success(self) -> bool:
+        """
+        Compatibility flag для handlers.
+        """
+
+        return self.was_activated
+
+    @property
+    def activated(self) -> bool:
+        """
+        Compatibility alias.
+        """
+
+        return self.was_activated
+
 
 @dataclass(slots=True, frozen=True)
 class InviteRevocationResult:
@@ -106,6 +138,22 @@ class InviteRevocationResult:
     revoked_by_id: int
 
     reason: str
+
+    @property
+    def success(self) -> bool:
+        """
+        Compatibility flag для handlers.
+        """
+
+        return self.was_revoked
+
+    @property
+    def revoked(self) -> bool:
+        """
+        Compatibility alias.
+        """
+
+        return self.was_revoked
 
 
 @dataclass(slots=True, frozen=True)
@@ -460,6 +508,157 @@ class InviteService:
         return result
 
     # ==========================================
+    # УНІВЕРСАЛЬНИЙ CREATE ADAPTER
+    # ==========================================
+
+    async def create_invite(
+        self,
+        *,
+        actor: User,
+        invite_type: str | None = None,
+        scope: str | None = None,
+        invite_scope: str | None = None,
+        target_id: int | None = None,
+        store_id: int | None = None,
+        bush_id: int | None = None,
+        role: UserRole | str | None = None,
+        target_role: UserRole | str | None = None,
+        user_role: UserRole | str | None = None,
+        expires_in: timedelta | None = None,
+        expires_at: datetime | None = None,
+        expiration: timedelta | None = None,
+        max_uses: int | None = None,
+        single_use: bool | None = None,
+        is_single_use: bool | None = None,
+        note: str | None = None,
+        created_at: datetime | None = None,
+        **_: Any,
+    ) -> InviteCreationServiceResult:
+        """
+        Compatibility adapter для handlers/invites.py.
+        """
+
+        resolved_type = (
+            invite_type
+            or scope
+            or invite_scope
+            or ""
+        ).strip().lower()
+
+        if resolved_type == "network":
+            resolved_type = "director"
+
+        resolved_expires_in = (
+            expiration
+            if expiration is not None
+            else expires_in
+        )
+
+        if expires_at is not None:
+            resolved_expires_in = None
+
+        resolved_single_use = (
+            single_use
+            if single_use is not None
+            else is_single_use
+        )
+
+        if max_uses is None:
+            max_uses = (
+                1
+                if resolved_single_use is not False
+                else 1000
+            )
+
+        if resolved_type == "store":
+            resolved_store_id = (
+                store_id
+                or target_id
+            )
+
+            if not resolved_store_id:
+                raise ValueError(
+                    "Для invite ТТ не вказано store_id."
+                )
+
+            return await self.create_store_invite(
+                actor=actor,
+                store_id=int(resolved_store_id),
+                expires_in=resolved_expires_in,
+                expires_at=expires_at,
+                max_uses=max_uses,
+                note=note,
+                created_at=created_at,
+            )
+
+        if resolved_type == "bush":
+            resolved_bush_id = (
+                bush_id
+                or target_id
+            )
+
+            if not resolved_bush_id:
+                raise ValueError(
+                    "Для invite куща не вказано bush_id."
+                )
+
+            resolved_role = self.resolve_user_role(
+                target_role
+                or role
+                or user_role
+                or UserRole.LION
+            )
+
+            if resolved_role not in {
+                UserRole.BUSH_ADMIN,
+                UserRole.LION,
+            }:
+                raise ValueError(
+                    "Invite куща підтримує лише "
+                    "BUSH_ADMIN або LION."
+                )
+
+            return await self.create_bush_invite(
+                actor=actor,
+                bush_id=int(resolved_bush_id),
+                target_role=resolved_role,
+                expires_in=resolved_expires_in,
+                expires_at=expires_at,
+                max_uses=max_uses,
+                note=note,
+                created_at=created_at,
+            )
+
+        resolved_role = self.resolve_user_role(
+            target_role
+            or role
+            or user_role
+            or (
+                UserRole.DIRECTOR
+                if resolved_type == "director"
+                else None
+            )
+        )
+
+        if (
+            resolved_type == "director"
+            or resolved_role == UserRole.DIRECTOR
+        ):
+            return await self.create_director_invite(
+                actor=actor,
+                expires_in=resolved_expires_in,
+                expires_at=expires_at,
+                max_uses=max_uses,
+                note=note,
+                created_at=created_at,
+            )
+
+        raise ValueError(
+            "Невідомий тип invite: "
+            f"{resolved_type or 'не вказано'}."
+        )
+
+    # ==========================================
     # АКТИВАЦІЯ ЗАПРОШЕННЯ
     # ==========================================
 
@@ -477,16 +676,6 @@ class InviteService:
     ) -> InviteActivationServiceResult:
         """
         Активує запрошення після /start.
-
-        Метод передає всю атомарну операцію
-        репозиторію:
-
-        - блокування запрошення FOR UPDATE;
-        - перевірку строку дії;
-        - перевірку кількості використань;
-        - зміну ролі;
-        - створення прив’язки;
-        - збільшення use_count.
         """
 
         payload = self.parse_start_payload(
@@ -651,7 +840,7 @@ class InviteService:
         *,
         actor: User,
         invite_id: int,
-        reason: str,
+        reason: str = "Відкликано через Telegram",
         revoked_at: datetime | None = None,
     ) -> InviteRevocationResult:
         """
@@ -741,10 +930,6 @@ class InviteService:
         actor: User,
         invite: Any,
     ) -> None:
-        """
-        Перевіряє право відкликати запрошення.
-        """
-
         store_id = self.extract_int_attribute(
             invite,
             "store_id",
@@ -810,8 +995,6 @@ class InviteService:
         active_only: bool = False,
         limit: int = 100,
     ) -> list[Any]:
-        """Повертає запрошення конкретної ТТ."""
-
         await self.access.require_store_view(
             user,
             store_id,
@@ -838,8 +1021,6 @@ class InviteService:
         active_only: bool = False,
         limit: int = 100,
     ) -> list[Any]:
-        """Повертає запрошення конкретного куща."""
-
         await self.access.require_bush_view(
             user,
             bush_id,
@@ -865,10 +1046,6 @@ class InviteService:
         active_only: bool = False,
         limit: int = 100,
     ) -> list[Any]:
-        """
-        Повертає запрошення, створені користувачем.
-        """
-
         result = await self.invoke_repository(
             method_names=(
                 "get_created_by_user",
@@ -883,8 +1060,93 @@ class InviteService:
 
         return list(result or [])
 
+    async def list_invites(
+        self,
+        *,
+        actor: User | None = None,
+        user: User | None = None,
+        active_only: bool = False,
+        include_expired: bool = True,
+        include_revoked: bool = True,
+        limit: int = 100,
+        **_: Any,
+    ) -> list[Any]:
+        """
+        Compatibility adapter для handlers.
+        """
+
+        resolved_user = (
+            actor
+            or user
+        )
+
+        if resolved_user is None:
+            raise ValueError(
+                "Не вказано користувача."
+            )
+
+        return await self.get_created_invites(
+            user=resolved_user,
+            active_only=active_only,
+            limit=limit,
+        )
+
+    async def get_invite(
+        self,
+        *,
+        actor: User | None = None,
+        user: User | None = None,
+        invite_id: int | None = None,
+        id: int | None = None,
+        **_: Any,
+    ) -> Any | None:
+        """
+        Compatibility adapter для картки invite.
+        """
+
+        resolved_user = (
+            actor
+            or user
+        )
+
+        if resolved_user is None:
+            raise ValueError(
+                "Не вказано користувача."
+            )
+
+        resolved_id = (
+            invite_id
+            if invite_id is not None
+            else id
+        )
+
+        if resolved_id is None or resolved_id <= 0:
+            raise ValueError(
+                "Некоректний ID invite."
+            )
+
+        invite = await self.invoke_repository(
+            method_names=(
+                "get_by_id",
+                "get_invite_by_id",
+                "find_by_id",
+            ),
+            invite_id=resolved_id,
+            entity_id=resolved_id,
+        )
+
+        if invite is None:
+            return None
+
+        await self.ensure_can_manage_invite(
+            actor=resolved_user,
+            invite=invite,
+        )
+
+        return invite
+
     # ==========================================
-    # ОЧИЩЕННЯ ПРОСТРОЧЕНИХ ЗАПРОШЕНЬ
+    # ОЧИЩЕННЯ ПРОСТРОЧЕНИХ
     # ==========================================
 
     async def expire_outdated_invites(
@@ -893,12 +1155,6 @@ class InviteService:
         current_time: datetime | None = None,
         limit: int = 1000,
     ) -> int:
-        """
-        Позначає прострочені запрошення.
-
-        Метод призначений для scheduler.
-        """
-
         now = current_time or datetime.now(UTC)
 
         self.validate_aware_datetime(
@@ -945,8 +1201,6 @@ class InviteService:
         self,
         token: str,
     ) -> str:
-        """Створює Telegram start-посилання."""
-
         normalized_token = self.normalize_token(
             token
         )
@@ -965,15 +1219,6 @@ class InviteService:
         self,
         payload_or_token: str,
     ) -> InvitePayload:
-        """
-        Розбирає:
-
-        invite_token
-        inv_token
-        token
-        https://t.me/bot?start=invite_token
-        """
-
         normalized_value = (
             self.normalize_required_text(
                 payload_or_token,
@@ -1014,7 +1259,7 @@ class InviteService:
         )
 
     # ==========================================
-    # СТВОРЕННЯ РЕЗУЛЬТАТУ
+    # CREATION RESULT
     # ==========================================
 
     def build_creation_result(
@@ -1028,8 +1273,6 @@ class InviteService:
         expires_at: datetime | None,
         max_uses: int,
     ) -> InviteCreationServiceResult:
-        """Формує результат створення."""
-
         token = self.extract_token(
             created_invite
         )
@@ -1047,7 +1290,7 @@ class InviteService:
         )
 
     # ==========================================
-    # ТЕКСТ РЕЗУЛЬТАТУ АКТИВАЦІЇ
+    # ACTIVATION MESSAGE
     # ==========================================
 
     @classmethod
@@ -1060,8 +1303,6 @@ class InviteService:
         requires_approval: bool,
         was_activated: bool,
     ) -> str:
-        """Формує повідомлення для користувача."""
-
         if not was_activated:
             return (
                 "Не вдалося активувати запрошення. "
@@ -1110,8 +1351,6 @@ class InviteService:
         result: InviteCreationServiceResult,
         description: str,
     ) -> None:
-        """Фіксує створення запрошення."""
-
         invite = result.invite
 
         invite_id = self.extract_int_attribute(
@@ -1141,18 +1380,21 @@ class InviteService:
                 source="telegram_bot",
             ),
             new_values={
-                "target_role": (
-                    result.target_role.value
-                ),
-                "scope": result.scope.value,
-                "store_id": result.store_id,
-                "bush_id": result.bush_id,
+                "target_role":
+                    result.target_role.value,
+                "scope":
+                    result.scope.value,
+                "store_id":
+                    result.store_id,
+                "bush_id":
+                    result.bush_id,
                 "expires_at": (
                     result.expires_at.isoformat()
                     if result.expires_at is not None
                     else None
                 ),
-                "max_uses": result.max_uses,
+                "max_uses":
+                    result.max_uses,
             },
         )
 
@@ -1165,8 +1407,6 @@ class InviteService:
         telegram_chat_id: int | None,
         telegram_message_id: int | None,
     ) -> None:
-        """Фіксує активацію запрошення."""
-
         action = self.resolve_audit_action(
             "update",
             "activate",
@@ -1197,33 +1437,31 @@ class InviteService:
                     "Користувач активував "
                     "Telegram-запрошення"
                 ),
-                telegram_chat_id=(
-                    telegram_chat_id
-                ),
+                telegram_chat_id=telegram_chat_id,
                 telegram_message_id=(
                     telegram_message_id
                 ),
                 source="telegram_bot",
             ),
             new_values={
-                "user_id": user.id,
+                "user_id":
+                    user.id,
                 "target_role": (
                     result.target_role.value
                     if result.target_role
                     is not None
                     else None
                 ),
-                "store_id": result.store_id,
-                "bush_id": result.bush_id,
-                "requires_approval": (
-                    result.requires_approval
-                ),
-                "was_activated": (
-                    result.was_activated
-                ),
-                "activated_at": (
-                    activated_at.isoformat()
-                ),
+                "store_id":
+                    result.store_id,
+                "bush_id":
+                    result.bush_id,
+                "requires_approval":
+                    result.requires_approval,
+                "was_activated":
+                    result.was_activated,
+                "activated_at":
+                    activated_at.isoformat(),
             },
         )
 
@@ -1236,8 +1474,6 @@ class InviteService:
         reason: str,
         revoked_at: datetime,
     ) -> None:
-        """Фіксує відкликання запрошення."""
-
         action = self.resolve_audit_action(
             "update",
             "revoke",
@@ -1268,28 +1504,25 @@ class InviteService:
             },
             new_values={
                 "is_active": False,
-                "revoked_at": (
-                    revoked_at.isoformat()
-                ),
-                "store_id": (
+                "revoked_at":
+                    revoked_at.isoformat(),
+                "store_id":
                     self.extract_int_attribute(
                         invite,
                         "store_id",
                         "target_store_id",
-                    )
-                ),
-                "bush_id": (
+                    ),
+                "bush_id":
                     self.extract_int_attribute(
                         invite,
                         "bush_id",
                         "target_bush_id",
-                    )
-                ),
+                    ),
             },
         )
 
     # ==========================================
-    # АДАПТЕР РЕПОЗИТОРІЮ
+    # REPOSITORY ADAPTER
     # ==========================================
 
     async def invoke_repository(
@@ -1298,14 +1531,6 @@ class InviteService:
         method_names: tuple[str, ...],
         **kwargs: Any,
     ) -> Any:
-        """
-        Викликає перший доступний метод
-        InviteRepository.
-
-        Додатково відфільтровує аргументи,
-        яких немає у сигнатурі методу.
-        """
-
         repository = self.repositories.invites
 
         for method_name in method_names:
@@ -1333,11 +1558,14 @@ class InviteService:
             else:
                 accepted_kwargs = {
                     name: value
-                    for name, value in kwargs.items()
+                    for name, value
+                    in kwargs.items()
                     if name in signature.parameters
                 }
 
-            result = method(**accepted_kwargs)
+            result = method(
+                **accepted_kwargs
+            )
 
             if inspect.isawaitable(result):
                 return await result
@@ -1351,15 +1579,13 @@ class InviteService:
         )
 
     # ==========================================
-    # ВИТЯГУВАННЯ ДАНИХ
+    # DATA EXTRACTION
     # ==========================================
 
     @staticmethod
     def extract_invite_object(
         created_invite: Any,
     ) -> Any:
-        """Витягує модель із CreatedInvite."""
-
         for field_name in (
             "invite",
             "invite_link",
@@ -1382,8 +1608,6 @@ class InviteService:
         cls,
         created_invite: Any,
     ) -> str:
-        """Витягує відкритий токен."""
-
         invite = cls.extract_invite_object(
             created_invite
         )
@@ -1422,8 +1646,6 @@ class InviteService:
         cls,
         source: Any,
     ) -> UserRole | None:
-        """Витягує роль із результату."""
-
         raw_role = cls.extract_attribute(
             source,
             "target_role",
@@ -1471,8 +1693,6 @@ class InviteService:
         *field_names: str,
         default: Any = None,
     ) -> Any:
-        """Витягує перший доступний атрибут."""
-
         if source is None:
             return default
 
@@ -1498,8 +1718,6 @@ class InviteService:
         source: Any,
         *field_names: str,
     ) -> int | None:
-        """Витягує цілий ID."""
-
         value = cls.extract_attribute(
             source,
             *field_names,
@@ -1512,11 +1730,14 @@ class InviteService:
         try:
             return int(value)
 
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError,
+        ):
             return None
 
     # ==========================================
-    # ENUM-РЕЗОЛВЕРИ
+    # ENUM
     # ==========================================
 
     @classmethod
@@ -1524,8 +1745,6 @@ class InviteService:
         cls,
         *names: str,
     ) -> AuditAction:
-        """Знаходить AuditAction."""
-
         try:
             return cls.resolve_enum_member(
                 AuditAction,
@@ -1546,8 +1765,6 @@ class InviteService:
         cls,
         *names: str,
     ) -> EntityType:
-        """Знаходить EntityType."""
-
         return cls.resolve_enum_member(
             EntityType,
             *names,
@@ -1558,8 +1775,6 @@ class InviteService:
         enum_class: type[EnumType],
         *names: str,
     ) -> EnumType:
-        """Шукає enum за назвою або значенням."""
-
         normalized_names = {
             name.strip().lower()
             for name in names
@@ -1583,25 +1798,62 @@ class InviteService:
         )
 
     # ==========================================
-    # ФОРМАТУВАННЯ
+    # USER ROLE
+    # ==========================================
+
+    @staticmethod
+    def resolve_user_role(
+        value: UserRole | str | None,
+    ) -> UserRole | None:
+        if value is None:
+            return None
+
+        if isinstance(
+            value,
+            UserRole,
+        ):
+            return value
+
+        normalized = (
+            str(value)
+            .strip()
+            .lower()
+        )
+
+        for role in UserRole:
+            if normalized in {
+                role.name.lower(),
+                str(role.value).lower(),
+            }:
+                return role
+
+        raise ValueError(
+            f"Невідома роль користувача: {value}."
+        )
+
+    # ==========================================
+    # FORMATTING
     # ==========================================
 
     @staticmethod
     def role_text(
         role: UserRole | None,
     ) -> str:
-        """Повертає зрозумілу назву ролі."""
-
         translations = {
-            UserRole.ROOT_ADMIN: "ROOT_ADMIN",
-            UserRole.DIRECTOR: "директор",
-            UserRole.BUSH_ADMIN: (
-                "адміністратор куща"
-            ),
-            UserRole.LION: "лев",
-            UserRole.STORE_USER: (
-                "працівник торгової точки"
-            ),
+            UserRole.ROOT_ADMIN:
+                "ROOT_ADMIN",
+
+            UserRole.DIRECTOR:
+                "директор",
+
+            UserRole.BUSH_ADMIN:
+                "адміністратор куща",
+
+            UserRole.LION:
+                "лев",
+
+            UserRole.STORE_USER:
+                "працівник торгової точки",
         }
 
         if role is None:
@@ -1613,7 +1865,7 @@ class InviteService:
         )
 
     # ==========================================
-    # ВАЛІДАЦІЯ
+    # VALIDATION
     # ==========================================
 
     @classmethod
@@ -1621,8 +1873,6 @@ class InviteService:
         cls,
         token: str,
     ) -> str:
-        """Перевіряє токен запрошення."""
-
         normalized_token = token.strip()
 
         if not normalized_token:
@@ -1644,10 +1894,10 @@ class InviteService:
     def normalize_bot_username(
         bot_username: str,
     ) -> str:
-        """Нормалізує username Telegram-бота."""
-
         normalized_username = (
-            bot_username.strip().lstrip("@")
+            bot_username
+            .strip()
+            .lstrip("@")
         )
 
         if not normalized_username:
@@ -1674,8 +1924,6 @@ class InviteService:
         expires_in: timedelta | None,
         expires_at: datetime | None,
     ) -> datetime | None:
-        """Розраховує строк дії запрошення."""
-
         if (
             expires_in is not None
             and expires_at is not None
@@ -1718,8 +1966,6 @@ class InviteService:
     def validate_max_uses(
         max_uses: int,
     ) -> None:
-        """Перевіряє кількість активацій."""
-
         if isinstance(max_uses, bool):
             raise ValueError(
                 "Кількість використань "
@@ -1738,8 +1984,6 @@ class InviteService:
         *,
         field_name: str,
     ) -> None:
-        """Перевіряє наявність часового поясу."""
-
         if (
             value.tzinfo is None
             or value.utcoffset() is None
@@ -1755,8 +1999,6 @@ class InviteService:
         *,
         field_name: str,
     ) -> str:
-        """Нормалізує обов’язковий текст."""
-
         normalized_value = " ".join(
             value.strip().split()
         )
@@ -1777,8 +2019,6 @@ class InviteService:
     def normalize_optional_text(
         value: str | None,
     ) -> str | None:
-        """Нормалізує необов’язковий текст."""
-
         if value is None:
             return None
 

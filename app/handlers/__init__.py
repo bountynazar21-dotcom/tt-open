@@ -50,7 +50,6 @@ from app.handlers.store import (
 # ROOT HANDLERS ROUTER
 # =========================================================
 
-
 router = Router(
     name="handlers",
 )
@@ -59,19 +58,6 @@ router = Router(
 # =========================================================
 # GLOBAL ERROR HANDLER
 # =========================================================
-#
-# Реєструємо error handler саме
-# на БАТЬКІВСЬКОМУ router.
-#
-# Таким чином він ловитиме помилки
-# з усіх дочірніх routers.
-#
-# Окремо errors_router сюди
-# не підключаємо, тому що sibling
-# router не є батьківським для
-# інших handlers.
-# =========================================================
-
 
 router.errors.register(
     global_error_handler
@@ -82,106 +68,63 @@ router.errors.register(
 # ROUTER ORDER
 # =========================================================
 #
-# ПОРЯДОК ВАЖЛИВИЙ.
+# Порядок важливий:
 #
-# Спочатку:
-#   - реєстрація
-#   - адмінські специфічні callbacks
-#   - reports / invites / bindings
+# 1. registration
+# 2. management / admin
+# 3. invites / bindings / reports
+# 4. role dashboards
+# 5. store operations
+# 6. group events
+# 7. common fallback
 #
-# Потім:
-#   - role dashboards
-#
-# Далі:
-#   - store
-#   - closing
-#   - opening
-#
-# В самому кінці:
-#   - group_events
-#   - common
-#
-# common.py має загальні callbacks,
-# тому він ОБОВ'ЯЗКОВО останній.
-#
-# store.py стоїть ПЕРЕД opening.py,
-# тому що opening.py має fallback
-# для StoreAction.VIEW.
-#
-# root_admin.py стоїть ПЕРЕД
-# group_events.py, тому що обидва
-# можуть працювати з GroupCallback.
+# common_router завжди останній.
 # =========================================================
-
 
 router.include_routers(
     # -----------------------------------------------------
     # REGISTRATION
     # -----------------------------------------------------
-
     registration_router,
 
     # -----------------------------------------------------
     # ROOT / MANAGEMENT
     # -----------------------------------------------------
-
     root_admin_router,
-
     bindings_router,
-
     invites_router,
-
     reports_router,
 
     # -----------------------------------------------------
     # ROLE PANELS
     # -----------------------------------------------------
-
     director_router,
-
     bush_admin_router,
-
     lion_router,
 
     # -----------------------------------------------------
     # STORE OPERATIONS
     # -----------------------------------------------------
-
     store_router,
-
     closing_router,
-
     opening_router,
 
     # -----------------------------------------------------
     # TELEGRAM GROUP EVENTS
     # -----------------------------------------------------
-
     group_events_router,
 
     # -----------------------------------------------------
     # COMMON MUST BE LAST
     # -----------------------------------------------------
-
     common_router,
 )
-
-
-# =========================================================
-# PUBLIC API
-# =========================================================
 
 
 def get_handlers_router() -> Router:
     """
     Повертає головний router
     усіх Telegram handlers.
-
-    Використання:
-
-        dp.include_router(
-            get_handlers_router()
-        )
     """
 
     return router

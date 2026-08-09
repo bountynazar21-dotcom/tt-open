@@ -9,10 +9,15 @@ import uvicorn
 from fastapi import FastAPI
 
 from app.bot import (
+    get_bot_and_dispatcher,
     run_polling,
     shutdown_bot,
 )
 from app.config import settings
+from app.scheduler import (
+    shutdown_scheduler,
+    start_scheduler,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +32,11 @@ async def lifespan(
 ):
     """
     Startup / shutdown застосунку.
+
+    Тут запускаються:
+    - Telegram bot;
+    - APScheduler;
+    - FastAPI.
     """
 
     global bot_task
@@ -36,7 +46,36 @@ async def lifespan(
         settings.app_name,
     )
 
-    # Поки працюємо через polling.
+    # =====================================================
+    # BOT INSTANCE
+    # =====================================================
+
+    bot, _ = get_bot_and_dispatcher()
+
+    # =====================================================
+    # SCHEDULER
+    # =====================================================
+
+    try:
+        start_scheduler(
+            bot=bot,
+        )
+
+        logger.info(
+            "Scheduler startup completed"
+        )
+
+    except Exception:
+        logger.exception(
+            "Scheduler startup failed"
+        )
+
+        raise
+
+    # =====================================================
+    # TELEGRAM
+    # =====================================================
+
     if not settings.use_webhook:
         bot_task = asyncio.create_task(
             run_polling(),
@@ -61,6 +100,22 @@ async def lifespan(
             "Stopping application..."
         )
 
+        # =================================================
+        # STOP SCHEDULER FIRST
+        # =================================================
+
+        try:
+            shutdown_scheduler()
+
+        except Exception:
+            logger.exception(
+                "Scheduler shutdown failed"
+            )
+
+        # =================================================
+        # STOP TELEGRAM POLLING
+        # =================================================
+
         if bot_task is not None:
             bot_task.cancel()
 
@@ -70,6 +125,10 @@ async def lifespan(
                 await bot_task
 
             bot_task = None
+
+        # =================================================
+        # CLOSE TELEGRAM HTTP SESSION
+        # =================================================
 
         await shutdown_bot()
 

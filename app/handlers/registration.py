@@ -7,7 +7,7 @@ from typing import Any
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from app.states.registration import RegistrationStates
 from aiogram.types import (
     CallbackQuery,
     Message,
@@ -54,21 +54,6 @@ logger = logging.getLogger(
 router = Router(
     name="registration",
 )
-
-
-# =========================================================
-# FSM
-# =========================================================
-
-
-class RegistrationStates(
-    StatesGroup
-):
-    """
-    Стан процесу реєстрації.
-    """
-
-    waiting_contact = State()
 
 
 # =========================================================
@@ -619,11 +604,16 @@ async def activate_invite(
     )
 
     payload = {
+        "token_or_payload": token,
         "token": token,
         "invite_token": token,
         "code": token,
+        "raw_token": token,
 
         "user": user,
+        "db_user": user,
+        "database_user": user,
+
         "user_id": getattr(
             user,
             "id",
@@ -643,6 +633,12 @@ async def activate_invite(
         "telegram_user":
             telegram_user,
 
+        "telegram_username": (
+            telegram_user.username
+            if telegram_user
+            else None
+        ),
+
         "username": (
             telegram_user.username
             if telegram_user
@@ -660,6 +656,40 @@ async def activate_invite(
             if telegram_user
             else None
         ),
+
+        "full_name": (
+            telegram_user.full_name
+            if telegram_user
+            else getattr(
+                user,
+                "full_name",
+                None,
+            )
+        ),
+
+        "language_code": (
+            telegram_user.language_code
+            if telegram_user
+            else None
+        ),
+
+        "telegram_chat_id": (
+            message.chat.id
+            if message.chat
+            else None
+        ),
+
+        "chat_id": (
+            message.chat.id
+            if message.chat
+            else None
+        ),
+
+        "telegram_message_id":
+            message.message_id,
+
+        "message_id":
+            message.message_id,
     }
 
     last_error: Exception | None = None
@@ -696,13 +726,30 @@ async def activate_invite(
         ) as error:
             last_error = error
 
+            logger.warning(
+                "Invite activation method rejected | "
+                "method=%s user_id=%s error=%s",
+                method_name,
+                getattr(
+                    user,
+                    "id",
+                    None,
+                ),
+                error,
+            )
+
             continue
 
         except Exception as error:
             logger.exception(
-                "Invite activation failed "
-                "for token=%s",
-                token,
+                "Invite activation failed | "
+                "method=%s user_id=%s",
+                method_name,
+                getattr(
+                    user,
+                    "id",
+                    None,
+                ),
             )
 
             last_error = error
@@ -714,14 +761,12 @@ async def activate_invite(
             "success",
             "activated",
             "accepted",
+            "consumed",
+            "used",
             "is_success",
         )
 
         if success is None:
-            # Якщо сервіс успішно
-            # повернув об'єкт результату
-            # без success=False,
-            # вважаємо операцію успішною.
             success = (
                 result is not None
             )
@@ -732,11 +777,23 @@ async def activate_invite(
             "reason",
             "error",
             "detail",
+            "description",
         )
 
         if success:
             await flush_changes(
                 data
+            )
+
+            logger.info(
+                "Invite activated | "
+                "user_id=%s method=%s",
+                getattr(
+                    user,
+                    "id",
+                    None,
+                ),
+                method_name,
             )
 
             return (
@@ -751,9 +808,24 @@ async def activate_invite(
         )
 
     if last_error is not None:
+        logger.warning(
+            "Invite activation unavailable | "
+            "user_id=%s error_type=%s",
+            getattr(
+                user,
+                "id",
+                None,
+            ),
+            type(
+                last_error
+            ).__name__,
+        )
+
         return (
             False,
-            str(last_error),
+            str(
+                last_error
+            ),
         )
 
     return (
@@ -1087,14 +1159,13 @@ async def start_handler(
             return
 
         logger.warning(
-            "Invite activation rejected: "
-            "user_id=%s token=%s reason=%s",
+            "Invite activation rejected | "
+            "user_id=%s reason=%s",
             getattr(
                 user,
                 "id",
                 None,
             ),
-            invite_token,
             reason,
         )
 
