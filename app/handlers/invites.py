@@ -3373,6 +3373,95 @@ async def execute_revoke(
 
 
 # =========================================================
+# LEGACY CREATE -> NEW INVITE UI
+# =========================================================
+
+
+@router.callback_query(
+    InviteCallback.filter(
+        F.action == InviteAction.STORE
+    )
+)
+async def legacy_store_invite_callback(
+    callback: CallbackQuery,
+    callback_data: InviteCallback,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    ????? ?????? STORE ??????????
+    ?? ????? Invite UI.
+    """
+
+    modern_callback = InviteUICallback(
+        action=InviteUIAction.SELECT_STORE,
+        target_id=callback_data.target_id,
+        invite_id=0,
+        page=0,
+    )
+
+    await select_store_callback(
+        callback,
+        modern_callback,
+        state,
+        **data,
+    )
+
+
+@router.callback_query(
+    InviteCallback.filter(
+        F.action == InviteAction.BUSH
+    )
+)
+async def legacy_bush_invite_callback(
+    callback: CallbackQuery,
+    callback_data: InviteCallback,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    ????? ?????? BUSH ??????????
+    ?? ????? Invite UI.
+    """
+
+    modern_callback = InviteUICallback(
+        action=InviteUIAction.SELECT_BUSH,
+        target_id=callback_data.target_id,
+        invite_id=0,
+        page=0,
+    )
+
+    await select_bush_callback(
+        callback,
+        modern_callback,
+        state,
+        **data,
+    )
+
+
+@router.callback_query(
+    InviteCallback.filter(
+        F.action == InviteAction.DIRECTOR
+    )
+)
+async def legacy_director_invite_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    ????? ?????? DIRECTOR ????????????
+    ?? ????? Invite UI.
+    """
+
+    await director_invite_callback(
+        callback,
+        state,
+        **data,
+    )
+
+
+# =========================================================
 # LEGACY MENU
 # =========================================================
 
