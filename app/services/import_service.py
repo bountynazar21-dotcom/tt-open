@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum, StrEnum
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -27,6 +27,9 @@ from app.repositories import (
 from app.services.access import AccessService
 from app.services.file_service import (
     DownloadedFile,
+)
+from app.services.schedule_service import (
+    ScheduleService,
 )
 from app.services.store_service import (
     StoreService,
@@ -105,6 +108,15 @@ class StoreImportRow:
 
     bush_id: int | None
     cluster_id: int | None
+
+    weekday_opening: time | None
+    weekday_closing: time | None
+
+    saturday_opening: time | None
+    saturday_closing: time | None
+
+    sunday_opening: time | None
+    sunday_closing: time | None
 
     is_active: bool | None
 
@@ -406,6 +418,54 @@ class ImportService:
             }
         ),
 
+        "weekday_opening": frozenset(
+            {
+                "\u043f\u043d-\u043f\u0442 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+                "\u043f\u043d \u043f\u0442 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+                "weekday opening",
+            }
+        ),
+
+        "weekday_closing": frozenset(
+            {
+                "\u043f\u043d-\u043f\u0442 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                "\u043f\u043d \u043f\u0442 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                "weekday closing",
+            }
+        ),
+
+        "saturday_opening": frozenset(
+            {
+                "\u0441\u0431 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+                "\u0441\u0443\u0431\u043e\u0442\u0430 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+                "saturday opening",
+            }
+        ),
+
+        "saturday_closing": frozenset(
+            {
+                "\u0441\u0431 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                "\u0441\u0443\u0431\u043e\u0442\u0430 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                "saturday closing",
+            }
+        ),
+
+        "sunday_opening": frozenset(
+            {
+                "\u043d\u0434 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+                "\u043d\u0435\u0434\u0456\u043b\u044f \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+                "sunday opening",
+            }
+        ),
+
+        "sunday_closing": frozenset(
+            {
+                "\u043d\u0434 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                "\u043d\u0435\u0434\u0456\u043b\u044f \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                "sunday closing",
+            }
+        ),
+
         "is_active": frozenset(
             {
                 "активний",
@@ -437,6 +497,13 @@ class ImportService:
         self.stores = (
             store_service
             or StoreService(
+                repositories,
+                access_service=self.access,
+            )
+        )
+
+        self.schedules = (
+            ScheduleService(
                 repositories,
                 access_service=self.access,
             )
@@ -1024,6 +1091,13 @@ class ImportService:
                 bush_id=None,
                 cluster_id=None,
 
+                weekday_opening=None,
+                weekday_closing=None,
+                saturday_opening=None,
+                saturday_closing=None,
+                sunday_opening=None,
+                sunday_closing=None,
+
                 is_active=None,
 
                 existing_store_id=(
@@ -1203,6 +1277,188 @@ class ImportService:
             )
 
         # --------------------------------------
+        # WEEKLY SCHEDULE
+        # --------------------------------------
+
+        schedule_values: dict[
+            str,
+            time | None,
+        ] = {}
+
+        schedule_fields = (
+            (
+                "weekday_opening",
+                "\u041f\u043d-\u041f\u0442 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+            (
+                "weekday_closing",
+                "\u041f\u043d-\u041f\u0442 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+            (
+                "saturday_opening",
+                "\u0421\u0431 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+            (
+                "saturday_closing",
+                "\u0421\u0431 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+            (
+                "sunday_opening",
+                "\u041d\u0434 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+            (
+                "sunday_closing",
+                "\u041d\u0434 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+        )
+
+        for (
+            field_key,
+            field_label,
+        ) in schedule_fields:
+            try:
+                schedule_values[
+                    field_key
+                ] = self.parse_schedule_time(
+                    raw_values.get(
+                        field_key
+                    )
+                )
+
+            except ValueError as error:
+                schedule_values[
+                    field_key
+                ] = None
+
+                issues.append(
+                    ImportIssue(
+                        row_number=row_number,
+                        field=field_key,
+                        level=(
+                            ImportIssueLevel.ERROR
+                        ),
+                        message=(
+                            f"{field_label}: "
+                            f"{error}"
+                        ),
+                    )
+                )
+
+        weekday_opening = (
+            schedule_values[
+                "weekday_opening"
+            ]
+        )
+
+        weekday_closing = (
+            schedule_values[
+                "weekday_closing"
+            ]
+        )
+
+        saturday_opening = (
+            schedule_values[
+                "saturday_opening"
+            ]
+        )
+
+        saturday_closing = (
+            schedule_values[
+                "saturday_closing"
+            ]
+        )
+
+        sunday_opening = (
+            schedule_values[
+                "sunday_opening"
+            ]
+        )
+
+        sunday_closing = (
+            schedule_values[
+                "sunday_closing"
+            ]
+        )
+
+        schedule_pairs = (
+            (
+                "weekday",
+                "\u041f\u043d-\u041f\u0442",
+                weekday_opening,
+                weekday_closing,
+            ),
+            (
+                "saturday",
+                "\u0421\u0431",
+                saturday_opening,
+                saturday_closing,
+            ),
+            (
+                "sunday",
+                "\u041d\u0434",
+                sunday_opening,
+                sunday_closing,
+            ),
+        )
+
+        for (
+            key,
+            label,
+            opening,
+            closing,
+        ) in schedule_pairs:
+            if (
+                (opening is None)
+                != (closing is None)
+            ):
+                issues.append(
+                    ImportIssue(
+                        row_number=row_number,
+                        field=(
+                            f"{key}_schedule"
+                        ),
+                        level=(
+                            ImportIssueLevel.ERROR
+                        ),
+                        message=(
+                            f"\u0414\u043b\u044f {label} "
+                            "\u043f\u043e\u0442\u0440\u0456\u0431\u043d\u043e "
+                            "\u0432\u043a\u0430\u0437\u0430\u0442\u0438 "
+                            "\u0456 \u0447\u0430\u0441 "
+                            "\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f, "
+                            "\u0456 \u0447\u0430\u0441 "
+                            "\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f."
+                        ),
+                    )
+                )
+
+            elif (
+                opening is not None
+                and closing is not None
+                and closing <= opening
+            ):
+                issues.append(
+                    ImportIssue(
+                        row_number=row_number,
+                        field=(
+                            f"{key}_schedule"
+                        ),
+                        level=(
+                            ImportIssueLevel.ERROR
+                        ),
+                        message=(
+                            f"\u0414\u043b\u044f {label} "
+                            "\u0447\u0430\u0441 "
+                            "\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f "
+                            "\u043c\u0430\u0454 \u0431\u0443\u0442\u0438 "
+                            "\u043f\u0456\u0437\u043d\u0456\u0448\u0435 "
+                            "\u0447\u0430\u0441\u0443 "
+                            "\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f."
+                        ),
+                    )
+                )
+
+        # --------------------------------------
         # ACTIVE
         # --------------------------------------
 
@@ -1246,6 +1502,18 @@ class ImportService:
                 if existing is not None
                 else True
             )
+
+        has_schedule_data = any(
+            value is not None
+            for value in (
+                weekday_opening,
+                weekday_closing,
+                saturday_opening,
+                saturday_closing,
+                sunday_opening,
+                sunday_closing,
+            )
+        )
 
         # --------------------------------------
         # INVALID?
@@ -1295,6 +1563,12 @@ class ImportService:
                 )
             )
 
+        if (
+            status == ImportRowStatus.UNCHANGED
+            and has_schedule_data
+        ):
+            status = ImportRowStatus.UPDATE
+
         return StoreImportRow(
             row_number=row_number,
 
@@ -1312,6 +1586,27 @@ class ImportService:
 
             bush_id=bush_id,
             cluster_id=cluster_id,
+
+            weekday_opening=(
+                weekday_opening
+            ),
+            weekday_closing=(
+                weekday_closing
+            ),
+
+            saturday_opening=(
+                saturday_opening
+            ),
+            saturday_closing=(
+                saturday_closing
+            ),
+
+            sunday_opening=(
+                sunday_opening
+            ),
+            sunday_closing=(
+                sunday_closing
+            ),
 
             is_active=is_active,
 
@@ -1567,6 +1862,13 @@ class ImportService:
                 )
             )
 
+            await self.apply_imported_schedule(
+                actor=actor,
+                store_id=create_result.store.id,
+                row=row,
+                reason=reason,
+            )
+
             return ImportApplyItemResult(
                 row_number=row.row_number,
 
@@ -1705,6 +2007,13 @@ class ImportService:
 
                     changed_at=changed_at,
                 )
+
+        await self.apply_imported_schedule(
+            actor=actor,
+            store_id=store.id,
+            row=row,
+            reason=reason,
+        )
 
         return ImportApplyItemResult(
             row_number=row.row_number,
@@ -2962,6 +3271,192 @@ class ImportService:
     # ==========================================
     # BOOL
     # ==========================================
+
+    async def apply_imported_schedule(
+        self,
+        *,
+        actor: User,
+        store_id: int,
+        row: StoreImportRow,
+        reason: str,
+    ) -> None:
+        groups = (
+            (
+                range(0, 5),
+                row.weekday_opening,
+                row.weekday_closing,
+            ),
+            (
+                (5,),
+                row.saturday_opening,
+                row.saturday_closing,
+            ),
+            (
+                (6,),
+                row.sunday_opening,
+                row.sunday_closing,
+            ),
+        )
+
+        has_schedule = any(
+            opening is not None
+            or closing is not None
+            for _, opening, closing in groups
+        )
+
+        if not has_schedule:
+            return
+
+        opening_deadline_minutes = (
+            await self.repositories.settings
+            .get_opening_deadline_minutes()
+        )
+
+        closing_deadline_minutes = (
+            await self.repositories.settings
+            .get_closing_deadline_minutes()
+        )
+
+        for (
+            weekdays,
+            opening,
+            closing,
+        ) in groups:
+            if (
+                opening is None
+                and closing is None
+            ):
+                continue
+
+            if (
+                opening is None
+                or closing is None
+            ):
+                raise ValueError(
+                    "??? ??????? ???????? ? ??? "
+                    "?????????, ? ??? ????????."
+                )
+
+            opening_deadline = (
+                self.add_minutes_to_time(
+                    opening,
+                    opening_deadline_minutes,
+                )
+            )
+
+            closing_deadline = (
+                self.add_minutes_to_time(
+                    closing,
+                    closing_deadline_minutes,
+                )
+            )
+
+            for weekday in weekdays:
+                await self.schedules.set_store_weekday(
+                    actor=actor,
+                    store_id=store_id,
+                    weekday=weekday,
+                    is_working_day=True,
+                    opening_time=opening,
+                    opening_control_deadline=(
+                        opening_deadline
+                    ),
+                    closing_time=closing,
+                    closing_control_deadline=(
+                        closing_deadline
+                    ),
+                    reason=reason,
+                )
+
+    @staticmethod
+    def add_minutes_to_time(
+        value: time,
+        minutes: int,
+    ) -> time:
+        result = (
+            datetime.combine(
+                date(2000, 1, 1),
+                value,
+            )
+            + timedelta(minutes=minutes)
+        )
+
+        return result.time().replace(
+            second=0,
+            microsecond=0,
+        )
+
+
+    @classmethod
+    def parse_schedule_time(
+        cls,
+        value: Any,
+    ) -> time | None:
+        """
+        Normalizes schedule time from Excel/CSV.
+        """
+
+        if not cls.has_value(value):
+            return None
+
+        if isinstance(
+            value,
+            datetime,
+        ):
+            return value.time().replace(
+                second=0,
+                microsecond=0,
+            )
+
+        if isinstance(
+            value,
+            time,
+        ):
+            return value.replace(
+                second=0,
+                microsecond=0,
+            )
+
+        text = (
+            str(value)
+            .strip()
+            .replace(".", ":")
+        )
+
+        match = re.fullmatch(
+            r"(\d{1,2}):(\d{2})(?::\d{2})?",
+            text,
+        )
+
+        if match is None:
+            raise ValueError(
+                "\u043e\u0447\u0456\u043a\u0443\u0454\u0442\u044c\u0441\u044f "
+                "\u0444\u043e\u0440\u043c\u0430\u0442 HH:MM, "
+                "\u043d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434 08:00"
+            )
+
+        hour = int(
+            match.group(1)
+        )
+
+        minute = int(
+            match.group(2)
+        )
+
+        if not (
+            0 <= hour <= 23
+            and 0 <= minute <= 59
+        ):
+            raise ValueError(
+                "\u043d\u0435\u043a\u043e\u0440\u0435\u043a\u0442\u043d\u0438\u0439 "
+                "\u0447\u0430\u0441"
+            )
+
+        return time(
+            hour=hour,
+            minute=minute,
+        )
+
 
     @staticmethod
     def parse_bool(
