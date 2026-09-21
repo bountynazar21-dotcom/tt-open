@@ -1170,6 +1170,8 @@ async def complete_closing(
     report_id: int,
     user: DatabaseUser,
     data: dict[str, Any],
+    cash_amount: Any = None,
+    receipt_file_id: str | None = None,
     closed_at: datetime | None = None,
     manual: bool = False,
 ) -> Any:
@@ -1221,22 +1223,47 @@ async def complete_closing(
         "is_manual": manual,
     }
 
+    if not manual:
+        method = getattr(
+            service,
+            "submit_report",
+            None,
+        )
+
+        if not callable(method):
+            raise RuntimeError(
+                "ClosingService.submit_report is unavailable."
+            )
+
+        if cash_amount is None:
+            raise RuntimeError(
+                "Cash amount is required to complete closing."
+            )
+
+        result = await call_method(
+            method,
+            {
+                "user": user,
+                "store_id": store_id,
+                "current_time": actual_time,
+                "cash_amount": cash_amount,
+                "receipt_file_id": receipt_file_id,
+                "queue_group_message": True,
+                "update_summaries": True,
+            },
+        )
+
+        await flush_changes(
+            data
+        )
+
+        return result
+
     method_names = (
-        (
-            "manual_close",
-            "manual_closing",
-            "correct_closing",
-            "set_manual_closing",
-        )
-        if manual
-        else (
-            "complete_closing",
-            "finish_closing",
-            "confirm_closing",
-            "close_store",
-            "complete",
-            "finalize",
-        )
+        "manual_close",
+        "manual_closing",
+        "correct_closing",
+        "set_manual_closing",
     )
 
     last_error: Exception | None = None
@@ -2716,6 +2743,8 @@ async def closing_confirm_callback(
             report_id=report_id,
             user=user,
             data=data,
+            cash_amount=amount,
+            receipt_file_id=receipt,
         )
 
     except Exception:
