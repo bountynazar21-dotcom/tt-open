@@ -40,9 +40,6 @@ from app.handlers.opening import (
     to_bool,
     to_int,
 )
-from app.handlers.root_admin import (
-    load_user,
-)
 from app.handlers.store import (
     load_store,
     store_title,

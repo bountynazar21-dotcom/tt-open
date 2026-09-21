@@ -294,36 +294,6 @@ def enum_member(
         ) from error
 
 
-def object_id(
-    value: Any,
-) -> int:
-    """
-    ID будь-якої ORM сутності.
-    """
-
-    if isinstance(
-        value,
-        int,
-    ):
-        return max(
-            0,
-            value,
-        )
-
-    return max(
-        0,
-        to_int(
-            first_attr(
-                value,
-                "id",
-                "user_id",
-                "store_id",
-                default=0,
-            )
-        ),
-    )
-
-
 # =========================================================
 # ROLE ACCESS
 # =========================================================
@@ -616,34 +586,6 @@ def store_object_id(
                 default=0,
             )
         ),
-    )
-
-
-def store_code(
-    store: Any,
-) -> str:
-    """
-    SB-XX.
-    """
-
-    store_id = store_object_id(
-        store
-    )
-
-    value = first_attr(
-        store,
-        "code",
-        "store_code",
-        default=None,
-    )
-
-    if value:
-        return str(
-            value
-        )
-
-    return (
-        f"ТТ-{store_id}"
     )
 
 
@@ -3334,45 +3276,42 @@ def object_id(
     if value is None:
         return 0
 
-    if isinstance(value, dict):
-        for key in (
-            "id",
-            "object_id",
-            "store_id",
-            "bush_id",
-            "user_id",
-        ):
-            raw = value.get(key)
-
-            if raw is not None:
-                try:
-                    return int(raw)
-                except (
-                    TypeError,
-                    ValueError,
-                ):
-                    pass
-
+    if isinstance(value, bool):
         return 0
 
-    for attr_name in (
-        "id",
-        "object_id",
-        "store_id",
-        "bush_id",
-        "user_id",
-    ):
-        raw = getattr(
+    if isinstance(value, int):
+        return max(
+            0,
             value,
-            attr_name,
-            None,
         )
 
-        if raw is None:
+    if isinstance(value, dict):
+        values = (
+            value.get("id"),
+            value.get("object_id"),
+            value.get("store_id"),
+            value.get("bush_id"),
+            value.get("user_id"),
+        )
+
+    else:
+        values = (
+            getattr(value, "id", None),
+            getattr(value, "object_id", None),
+            getattr(value, "store_id", None),
+            getattr(value, "bush_id", None),
+            getattr(value, "user_id", None),
+        )
+
+    for raw in values:
+        if raw is None or isinstance(raw, bool):
             continue
 
         try:
-            return int(raw)
+            return max(
+                0,
+                int(raw),
+            )
 
         except (
             TypeError,
@@ -3381,7 +3320,6 @@ def object_id(
             continue
 
     return 0
-
 
 def object_is_active(
     value: Any,
@@ -3493,53 +3431,6 @@ def store_code(
         f"ТТ-{identifier}"
         if identifier
         else "—"
-    )
-
-
-def store_name(
-    store: Any,
-) -> str:
-    """
-    Назва / адреса ТТ.
-    """
-
-    if store is None:
-        return "Торгова точка"
-
-    if isinstance(
-        store,
-        dict,
-    ):
-        value = (
-            store.get("name")
-            or store.get("title")
-            or store.get("address")
-        )
-
-    else:
-        value = (
-            getattr(
-                store,
-                "name",
-                None,
-            )
-            or getattr(
-                store,
-                "title",
-                None,
-            )
-            or getattr(
-                store,
-                "address",
-                None,
-            )
-        )
-
-    if value:
-        return str(value)
-
-    return store_code(
-        store
     )
 
 

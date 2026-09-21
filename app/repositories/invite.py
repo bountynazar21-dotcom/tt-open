@@ -1044,6 +1044,72 @@ class InviteRepository:
         return invites
 
     # ==========================================
+    # ОЧИЩЕННЯ ПРОСТРОЧЕНИХ ЗАПРОШЕНЬ
+    # ==========================================
+
+    async def expire_outdated(
+        self,
+        *,
+        current_time: datetime,
+        expired_at: datetime | None = None,
+        limit: int = 1000,
+    ) -> int:
+        """
+        Знаходить активні запрошення, термін дії
+        яких уже минув.
+
+        У цій моделі статус EXPIRED є обчислюваним
+        через expires_at, тому окреме поле status
+        у базі не змінюється.
+
+        Метод повертає кількість прострочених
+        запрошень для scheduler/service.
+        """
+
+        self.validate_aware_datetime(
+            current_time,
+            field_name="current_time",
+        )
+
+        if expired_at is not None:
+            self.validate_aware_datetime(
+                expired_at,
+                field_name="expired_at",
+            )
+
+        self.validate_pagination(
+            limit=limit,
+            offset=0,
+        )
+
+        now = current_time.astimezone(UTC)
+
+        statement = (
+            select(InviteLink)
+            .where(
+                InviteLink.is_revoked.is_(False),
+                InviteLink.used_count
+                < InviteLink.max_uses,
+                InviteLink.expires_at.is_not(None),
+                InviteLink.expires_at <= now,
+            )
+            .order_by(
+                InviteLink.expires_at.asc()
+            )
+            .limit(limit)
+        )
+
+        result = await self.session.scalars(
+            statement
+        )
+
+        invites = list(
+            result.unique().all()
+        )
+
+        return len(invites)
+
+    # ==========================================
     # СПИСКИ ЗАПРОШЕНЬ
     # ==========================================
 
