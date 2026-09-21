@@ -190,6 +190,7 @@ class InviteService:
     """
 
     START_PREFIX = "invite_"
+    INVITE_TOKEN_SALT = "chikin_bot_invite_v1"
 
     TOKEN_PATTERN = re.compile(
         r"^[A-Za-z0-9_-]{8,256}$"
@@ -1545,6 +1546,24 @@ class InviteService:
 
             signature = inspect.signature(method)
 
+            call_kwargs = dict(kwargs)
+
+            if (
+                "salt" in signature.parameters
+                and "salt" not in call_kwargs
+            ):
+                call_kwargs["salt"] = (
+                    self.INVITE_TOKEN_SALT
+                )
+
+            if (
+                "bot_username" in signature.parameters
+                and "bot_username" not in call_kwargs
+            ):
+                call_kwargs["bot_username"] = (
+                    self.bot_username
+                )
+
             accepts_kwargs = any(
                 parameter.kind
                 == inspect.Parameter.VAR_KEYWORD
@@ -1553,13 +1572,13 @@ class InviteService:
             )
 
             if accepts_kwargs:
-                accepted_kwargs = kwargs
+                accepted_kwargs = call_kwargs
 
             else:
                 accepted_kwargs = {
                     name: value
                     for name, value
-                    in kwargs.items()
+                    in call_kwargs.items()
                     if name in signature.parameters
                 }
 
