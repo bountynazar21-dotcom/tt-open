@@ -1703,28 +1703,84 @@ def build_invite_list_item(
         default=None,
     )
 
-    return create_model(
-        InviteListItem,
+    raw_invite_type = first_attr(
+        invite,
+        "invite_type",
+        "type",
+        default=None,
+    )
 
+    type_candidates = {
+        str(
+            getattr(
+                raw_invite_type,
+                "value",
+                raw_invite_type,
+            )
+        ).lower(),
+        str(scope).lower(),
+        str(role).lower(),
+    }
+
+    ui_invite_type = next(
+        item
+        for item in InviteType
+        if (
+            str(
+                getattr(
+                    item,
+                    "value",
+                    item,
+                )
+            ).lower()
+            in type_candidates
+            or item.name.lower()
+            in type_candidates
+        )
+    )
+
+    raw_max_uses = first_attr(
+        invite,
+        "max_uses",
+        default=None,
+    )
+
+    max_uses = (
+        to_int(raw_max_uses)
+        if raw_max_uses is not None
+        else None
+    )
+
+    uses_count = (
+        to_int(
+            first_attr(
+                invite,
+                "uses_count",
+                "use_count",
+                "used_count",
+                default=0,
+            )
+        )
+        or 0
+    )
+
+    return InviteListItem(
         invite_id=identifier,
-
-        title=str(
-            label
-        ),
-
-        name=str(
-            label
-        ),
-
+        invite_type=ui_invite_type,
+        target_name=str(label),
         status=status,
-
-        scope=scope,
-
-        target_id=target_id,
-
-        created_at=created_at,
-
-        expires_at=expires_at,
+        is_single_use=(
+            max_uses == 1
+        ),
+        expires_text=(
+            format_datetime(
+                expires_at
+            )
+            if expires_at is not None
+            else None
+        ),
+        uses_count=uses_count,
+        max_uses=max_uses,
     )
 
 
