@@ -1922,7 +1922,7 @@ class StoreService:
 
         if for_update:
             statement = (
-                statement.with_for_update()
+                statement.with_for_update(of=Store)
             )
 
         store = await self.session.scalar(
