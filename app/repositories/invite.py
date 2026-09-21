@@ -1113,6 +1113,66 @@ class InviteRepository:
     # СПИСКИ ЗАПРОШЕНЬ
     # ==========================================
 
+    async def get_created_by_user(
+        self,
+        *,
+        user_id: int | None = None,
+        created_by_id: int | None = None,
+        active_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[InviteLink]:
+        creator_id = (
+            created_by_id
+            if created_by_id is not None
+            else user_id
+        )
+
+        if creator_id is None:
+            raise ValueError("created_by_id is required")
+
+        self.validate_positive_id(
+            creator_id,
+            field_name="created_by_id",
+        )
+
+        self.validate_pagination(
+            limit=limit,
+            offset=offset,
+        )
+
+        if active_only:
+            return await self.get_active_invites(
+                created_by_id=creator_id,
+                limit=limit,
+                offset=offset,
+            )
+
+        statement = (
+            select(InviteLink)
+            .options(
+                selectinload(InviteLink.store),
+                selectinload(InviteLink.bush),
+                selectinload(InviteLink.created_by),
+            )
+            .where(
+                InviteLink.created_by_id
+                == creator_id
+            )
+            .order_by(
+                InviteLink.created_at.desc()
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+
+        result = await self.session.scalars(
+            statement
+        )
+
+        return list(result.all())
+
+
     async def get_by_status(
         self,
         *,
