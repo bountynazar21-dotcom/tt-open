@@ -1145,10 +1145,7 @@ async def build_root_store_item(
             .WAITING_OPENING
         )
 
-    bush_name = await store_bush_name(
-        store=store,
-        data=data,
-    )
+    bush_name = store_bush_name(store)
 
     cluster_id = store_cluster_id(
         store
