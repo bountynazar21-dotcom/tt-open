@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -175,6 +175,8 @@ class OpeningService:
         business_date: date,
         bush_id: int | None = None,
         cluster_id: int | None = None,
+        current_time: datetime | None = None,
+        max_past_deadline_minutes: int = 30,
     ) -> OpeningPreparationResult:
         """
         Створює ранкові записи для всіх ТТ,
@@ -212,6 +214,46 @@ class OpeningService:
                 is not None
             )
         ]
+
+        if current_time is not None:
+            timezone_name = (
+                await self.get_timezone_name()
+            )
+
+            timezone = self.get_timezone(
+                timezone_name
+            )
+
+            local_now = (
+                current_time
+                .astimezone(timezone)
+            )
+
+            if (
+                business_date
+                == local_now.date()
+            ):
+                cutoff_datetime = (
+                    local_now
+                    - timedelta(
+                        minutes=(
+                            max_past_deadline_minutes
+                        )
+                    )
+                )
+
+                plans = [
+                    plan
+                    for plan in plans
+                    if (
+                        datetime.combine(
+                            business_date,
+                            plan.control_deadline,
+                            tzinfo=timezone,
+                        )
+                        >= cutoff_datetime
+                    )
+                ]
 
         created_checkins = (
             await self.repositories.openings

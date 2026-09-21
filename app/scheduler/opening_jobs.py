@@ -67,6 +67,7 @@ async def prepare_opening_records_job(
                 await services.opening
                 .prepare_daily_records(
                     business_date=current_time.date(),
+                    current_time=current_time,
                 )
             )
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from enum import Enum
 from html import escape
@@ -190,6 +190,8 @@ class ClosingService:
         business_date: date,
         bush_id: int | None = None,
         cluster_id: int | None = None,
+        current_time: datetime | None = None,
+        max_past_deadline_minutes: int = 30,
     ) -> ClosingPreparationResult:
         """
         Створює вечірні записи для всіх ТТ,
@@ -227,6 +229,46 @@ class ClosingService:
                 is not None
             )
         ]
+
+        if current_time is not None:
+            timezone_name = (
+                await self.get_timezone_name()
+            )
+
+            timezone = self.get_timezone(
+                timezone_name
+            )
+
+            local_now = (
+                current_time
+                .astimezone(timezone)
+            )
+
+            if (
+                business_date
+                == local_now.date()
+            ):
+                cutoff_datetime = (
+                    local_now
+                    - timedelta(
+                        minutes=(
+                            max_past_deadline_minutes
+                        )
+                    )
+                )
+
+                plans = [
+                    plan
+                    for plan in plans
+                    if (
+                        datetime.combine(
+                            business_date,
+                            plan.control_deadline,
+                            tzinfo=timezone,
+                        )
+                        >= cutoff_datetime
+                    )
+                ]
 
         created_reports = (
             await self.repositories.closings
