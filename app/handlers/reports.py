@@ -195,6 +195,7 @@ class RootAdminStates(
     waiting_bush_name = State()
 
     waiting_bush_code = State()
+    waiting_cluster_time = State()
 
 
 # =========================================================
@@ -2230,6 +2231,171 @@ async def root_clusters_callback(
                 total_pages=total_pages,
             )
         ),
+    )
+
+
+
+@router.callback_query(
+    ClusterCallback.filter(
+        F.action == ClusterAction.CREATE
+    )
+)
+async def root_cluster_create_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    user = await require_root(
+        callback,
+        data=data,
+    )
+
+    if user is None:
+        return
+
+    await callback.answer()
+    await state.clear()
+
+    await state.set_state(
+        RootAdminStates.waiting_cluster_time
+    )
+
+    if callback.message is not None:
+        await callback.message.answer(
+            "\u23f0 <b>\u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f "
+            "\u043a\u043b\u0430\u0441\u0442\u0435\u0440\u0430</b>\n\n"
+            "\u0412\u0432\u0435\u0434\u0456\u0442\u044c "
+            "\u0447\u0430\u0441 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f "
+            "\u0443 \u0444\u043e\u0440\u043c\u0430\u0442\u0456 "
+            "<code>HH:MM</code>.\n\n"
+            "\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434:\n"
+            "<code>07:30</code>\n\n"
+            "\u0414\u043b\u044f \u0441\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f: "
+            "/cancel"
+        )
+
+
+@router.message(
+    RootAdminStates.waiting_cluster_time
+)
+async def root_cluster_time_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    from datetime import time as dt_time
+
+    user = await require_root(
+        message,
+        data=data,
+    )
+
+    if user is None:
+        await state.clear()
+        return
+
+    value = (
+        message.text
+        or ""
+    ).strip()
+
+    if value.lower() in {
+        "/cancel",
+        "cancel",
+    }:
+        await state.clear()
+
+        await message.answer(
+            "\u274c \u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f "
+            "\u043a\u043b\u0430\u0441\u0442\u0435\u0440\u0430 "
+            "\u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e."
+        )
+        return
+
+    parts = value.split(":")
+
+    if len(parts) != 2:
+        await message.answer(
+            "\u26a0\ufe0f \u041d\u0435\u0432\u0456\u0440\u043d\u0438\u0439 "
+            "\u0444\u043e\u0440\u043c\u0430\u0442.\n\n"
+            "\u041f\u0440\u0438\u043a\u043b\u0430\u0434: "
+            "<code>07:30</code>"
+        )
+        return
+
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+
+        if not (
+            0 <= hour <= 23
+            and 0 <= minute <= 59
+        ):
+            raise ValueError
+
+        opening_time = dt_time(
+            hour=hour,
+            minute=minute,
+        )
+
+    except ValueError:
+        await message.answer(
+            "\u26a0\ufe0f \u041d\u0435\u0432\u0456\u0440\u043d\u0438\u0439 "
+            "\u0447\u0430\u0441.\n\n"
+            "\u041f\u0440\u0438\u043a\u043b\u0430\u0434: "
+            "<code>07:30</code>"
+        )
+        return
+
+    service = get_service(
+        data,
+        "clusters",
+        "cluster",
+    )
+
+    if service is None:
+        await message.answer(
+            "\u274c ClusterService "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439."
+        )
+        return
+
+    try:
+        await service.create_cluster(
+            actor=user,
+            opening_time=opening_time,
+            reason="Telegram cluster creation",
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Cluster creation failed"
+        )
+
+        await message.answer(
+            "\u274c <b>\u041d\u0435 "
+            "\u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+            "\u0441\u0442\u0432\u043e\u0440\u0438\u0442\u0438 "
+            "\u043a\u043b\u0430\u0441\u0442\u0435\u0440.</b>\n\n"
+            f"<code>{escape(str(error))}</code>"
+        )
+        return
+
+    await state.clear()
+
+    normalized = (
+        f"{hour:02d}:{minute:02d}"
+    )
+
+    await message.answer(
+        "\u2705 <b>\u041a\u043b\u0430\u0441\u0442\u0435\u0440 "
+        "\u0441\u0442\u0432\u043e\u0440\u0435\u043d\u043e.</b>\n\n"
+        f"\u23f0 <code>{normalized}</code>\n\n"
+        "\u041f\u043e\u0432\u0435\u0440\u043d\u0456\u0442\u044c\u0441\u044f "
+        "\u0434\u043e \u0441\u043f\u0438\u0441\u043a\u0443 "
+        "\u043a\u043b\u0430\u0441\u0442\u0435\u0440\u0456\u0432 "
+        "\u0456 \u043d\u0430\u0442\u0438\u0441\u043d\u0456\u0442\u044c "
+        "\U0001f504 \u041e\u043d\u043e\u0432\u0438\u0442\u0438."
     )
 
 
