@@ -246,6 +246,8 @@ class StoreAction(StrEnum):
 
     LIST = "ls"
 
+    BULK_STORE = "bst"
+
     VIEW = "v"
 
     SEARCH = "q"

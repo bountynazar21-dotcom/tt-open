@@ -427,6 +427,16 @@ def invites_main_keyboard(
             ],
             [
                 inline_button(
+                    text="🔗 Посилання для всіх ТТ",
+                    callback=InviteCallback(
+                        action=InviteAction.BULK_STORE,
+                        target_id=0,
+                        invite_id=0,
+                    ),
+                )
+            ],
+            [
+                inline_button(
                     text="📋 Активні запрошення",
                     callback=InviteCallback(
                         action=InviteAction.LIST,

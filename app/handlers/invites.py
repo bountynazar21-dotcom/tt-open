@@ -114,6 +114,62 @@ router = Router(
 
 PAGE_SIZE = 10
 
+CURRENT_STORE_CODES = frozenset(
+    {
+        "SB-5",
+        "SB-7",
+        "SB-8",
+        "SB-9",
+        "SB-10",
+        "SB-11",
+        "SB-12",
+        "SB-13",
+        "SB-14",
+        "SB-15",
+        "SB-16",
+        "SB-17",
+        "SB-22",
+        "SB-23",
+        "SB-24",
+        "SB-26",
+        "SB-27",
+        "SB-28",
+        "SB-30",
+        "SB-31",
+        "SB-32",
+        "SB-33",
+        "SB-34",
+        "SB-35",
+        "SB-36",
+        "SB-37",
+        "SB-38",
+        "SB-39",
+        "SB-41",
+        "SB-42",
+        "SB-43",
+        "SB-46",
+        "SB-48",
+        "SB-49",
+        "SB-57",
+        "SB-59",
+        "SB-60",
+        "SB-61",
+        "SB-62",
+        "SB-63",
+        "SB-69",
+        "SB-70",
+        "SB-71",
+        "SB-72",
+        "SB-73",
+        "SB-74",
+        "SB-75",
+        "SB-76",
+        "SB-78",
+        "SB-79",
+        "SB-80",
+    }
+)
+
 
 MANAGER_ROLES = {
     "ROOT_ADMIN",
@@ -3370,6 +3426,240 @@ async def execute_revoke(
             )
         ),
     )
+
+
+
+# =========================================================
+# BULK STORE INVITES
+# =========================================================
+
+
+@router.callback_query(
+    InviteCallback.filter(
+        F.action == InviteAction.BULK_STORE
+    )
+)
+async def bulk_store_invites_callback(
+    callback: CallbackQuery,
+    **data: Any,
+) -> None:
+    user = get_database_user(
+        data
+    )
+
+    if not is_root_admin(
+        user
+    ):
+        await callback.answer(
+            "\u041c\u0430\u0441\u043e\u0432\u0456 "
+            "\u043f\u043e\u0441\u0438\u043b\u0430\u043d\u043d\u044f "
+            "\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0456 "
+            "\u043b\u0438\u0448\u0435 ROOT ADMIN.",
+            show_alert=True,
+        )
+        return
+
+    service = get_invite_service(
+        data
+    )
+
+    if service is None:
+        await callback.answer(
+            "InviteService unavailable.",
+            show_alert=True,
+        )
+        return
+
+    create_method = getattr(
+        service,
+        "create_store_invite",
+        None,
+    )
+
+    if not callable(
+        create_method
+    ):
+        await callback.answer(
+            "create_store_invite unavailable.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer(
+        "\u0413\u0435\u043d\u0435\u0440\u0443\u044e "
+        "\u043f\u043e\u0441\u0438\u043b\u0430\u043d\u043d\u044f..."
+    )
+
+    stores = await build_store_items(
+        user=user,
+        data=data,
+    )
+
+    selected = []
+
+    for item in stores:
+        code = str(
+            getattr(
+                item,
+                "code",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        if code in CURRENT_STORE_CODES:
+            selected.append(
+                item
+            )
+
+    def sort_key(
+        item: Any,
+    ) -> int:
+        code = str(
+            getattr(
+                item,
+                "code",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        number = code.removeprefix(
+            "SB-"
+        )
+
+        if number.isdigit():
+            return int(
+                number
+            )
+
+        return 999999
+
+    selected.sort(
+        key=sort_key
+    )
+
+    if len(selected) != 51:
+        await safe_edit(
+            callback,
+            text=(
+                "\u26a0\ufe0f "
+                "\u041c\u0430\u0441\u043e\u0432\u0443 "
+                "\u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0456\u044e "
+                "\u0437\u0443\u043f\u0438\u043d\u0435\u043d\u043e.\n\n"
+                "\u0417\u043d\u0430\u0439\u0434\u0435\u043d\u043e "
+                f"{len(selected)} "
+                "\u0437 51 "
+                "\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0438\u0445 "
+                "\u0422\u0422."
+            ),
+        )
+        return
+
+    result_lines: list[str] = []
+
+    for item in selected:
+        store_id = to_int(
+            getattr(
+                item,
+                "store_id",
+                0,
+            )
+        )
+
+        code = str(
+            getattr(
+                item,
+                "code",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        if store_id <= 0:
+            raise ValueError(
+                f"Invalid store_id for {code}"
+            )
+
+        result = await create_method(
+            actor=user,
+            store_id=store_id,
+            max_uses=1,
+            note="bulk_store_links",
+        )
+
+        await flush_changes(
+            data
+        )
+
+        link = await build_deep_link(
+            callback=callback,
+            result=result,
+        )
+
+        if not link:
+            raise RuntimeError(
+                f"Deep link not created for {code}"
+            )
+
+        result_lines.append(
+            f"{code} \u2014 {link}"
+        )
+
+    await safe_edit(
+        callback,
+        text=(
+            "\u2705 "
+            "\u0413\u043e\u0442\u043e\u0432\u043e.\n\n"
+            "\u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043e "
+            f"{len(result_lines)} "
+            "\u043e\u0434\u043d\u043e\u0440\u0430\u0437\u043e\u0432\u0438\u0445 "
+            "\u043f\u043e\u0441\u0438\u043b\u0430\u043d\u044c."
+        ),
+    )
+
+    if callback.message is None:
+        return
+
+    chunks: list[str] = []
+    current: list[str] = []
+
+    for line in result_lines:
+        candidate = "\n".join(
+            current + [line]
+        )
+
+        if (
+            current
+            and len(candidate) > 3500
+        ):
+            chunks.append(
+                "\n".join(current)
+            )
+            current = [line]
+        else:
+            current.append(
+                line
+            )
+
+    if current:
+        chunks.append(
+            "\n".join(current)
+        )
+
+    for index, chunk in enumerate(
+        chunks,
+        start=1,
+    ):
+        prefix = (
+            "\U0001f517 "
+            "\u041f\u043e\u0441\u0438\u043b\u0430\u043d\u043d\u044f "
+            f"({index}/{len(chunks)})\n\n"
+        )
+
+        await callback.message.answer(
+            prefix + chunk
+        )
 
 
 # =========================================================
