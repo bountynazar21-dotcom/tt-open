@@ -295,6 +295,35 @@ class ClosingService:
             reports=tuple(all_reports),
         )
 
+    async def start_closing(
+        self,
+        *,
+        user: User,
+        store_id: int,
+        current_time: datetime,
+    ) -> ClosingReport:
+        self.validate_aware_datetime(
+            current_time,
+            field_name="current_time",
+        )
+
+        store = (
+            await self.access
+            .require_store_operation(
+                user,
+                store_id,
+            )
+        )
+
+        report, _, _ = (
+            await self.prepare_store_report(
+                store=store,
+                business_date=current_time.date(),
+            )
+        )
+
+        return report
+
     async def prepare_store_report(
         self,
         *,

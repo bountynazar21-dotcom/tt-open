@@ -797,6 +797,7 @@ async def start_closing(
             None,
         ),
 
+        "current_time": current_time,
         "started_at": current_time,
         "closing_started_at":
             current_time,
