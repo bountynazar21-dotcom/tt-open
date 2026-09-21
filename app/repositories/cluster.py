@@ -233,7 +233,7 @@ class ClusterRepository(BaseRepository[Cluster]):
             default_closing_time=(
                 normalized_closing_time
             ),
-            default_closing_control_deadline=(
+            default_closing_deadline=(
                 normalized_closing_deadline
             ),
         )
@@ -278,7 +278,7 @@ class ClusterRepository(BaseRepository[Cluster]):
             default_closing_time=(
                 normalized_closing_time
             ),
-            default_closing_control_deadline=(
+            default_closing_deadline=(
                 normalized_closing_deadline
             ),
             is_active=True,
@@ -372,7 +372,7 @@ class ClusterRepository(BaseRepository[Cluster]):
                 default_closing_time=(
                     default_closing_time
                 ),
-                default_closing_control_deadline=(
+                default_closing_deadline=(
                     closing_deadline
                 ),
             )
@@ -465,7 +465,7 @@ class ClusterRepository(BaseRepository[Cluster]):
             default_closing_time=(
                 final_closing_time
             ),
-            default_closing_control_deadline=(
+            default_closing_deadline=(
                 final_closing_deadline
             ),
         )
@@ -522,7 +522,7 @@ class ClusterRepository(BaseRepository[Cluster]):
             )
 
         if update_closing_deadline:
-            cluster.default_closing_control_deadline = (
+            cluster.default_closing_deadline = (
                 final_closing_deadline
             )
 
