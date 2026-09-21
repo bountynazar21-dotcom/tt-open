@@ -208,6 +208,48 @@ class AccessMiddleware(
                 repositories
             )
 
+        status_value = getattr(
+            getattr(user, "status", None),
+            "value",
+            getattr(user, "status", None),
+        )
+
+        event_text = (
+            getattr(event, "text", None)
+            or getattr(event, "caption", None)
+            or ""
+        ).strip()
+
+        parts = event_text.split(
+            maxsplit=1
+        )
+
+        command = (
+            parts[0].split("@", 1)[0].lower()
+            if parts
+            else ""
+        )
+
+        start_payload = (
+            parts[1].strip()
+            if len(parts) > 1
+            else ""
+        )
+
+        is_pending_invite_start = (
+            str(status_value).lower() == "pending"
+            and command == "/start"
+            and start_payload.startswith("invite_")
+        )
+
+        if is_pending_invite_start:
+            data["access_service"] = access_service
+
+            return await handler(
+                event,
+                data,
+            )
+
         context = await self.build_context(
             user=user,
             repositories=repositories,
