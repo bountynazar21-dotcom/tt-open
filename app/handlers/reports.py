@@ -73,6 +73,8 @@ from app.handlers.store import (
 )
 
 from app.keyboards import (
+    ClusterAction,
+    ClusterCallback,
     BushAction,
     BushCallback,
     AuditActionCallback,
@@ -2229,6 +2231,108 @@ async def root_clusters_callback(
             )
         ),
     )
+
+
+@router.callback_query(
+    ClusterCallback.filter(
+        F.action == ClusterAction.DEFAULTS
+    )
+)
+async def root_cluster_defaults_callback(
+    callback: CallbackQuery,
+    **data: Any,
+) -> None:
+    """
+    Create default opening clusters:
+    07:00 / 08:00 / 09:00 / 10:00.
+    """
+
+    user = await require_root(
+        callback,
+        data=data,
+    )
+
+    if user is None:
+        return
+
+    await callback.answer()
+
+    service = get_service(
+        data,
+        "clusters",
+        "cluster",
+    )
+
+    if service is None:
+        await callback.message.answer(
+            "\u274c ClusterService "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439."
+        )
+        return
+
+    try:
+        result = (
+            await service.ensure_default_clusters(
+                actor=user,
+                update_existing=False,
+            )
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Default cluster creation failed"
+        )
+
+        if callback.message is not None:
+            await callback.message.answer(
+                "\u274c <b>\u041d\u0435 "
+                "\u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+                "\u0441\u0442\u0432\u043e\u0440\u0438\u0442\u0438 "
+                "\u043a\u043b\u0430\u0441\u0442\u0435\u0440\u0438.</b>\n\n"
+                f"<code>{escape(str(error))}</code>"
+            )
+
+        return
+
+    stores = await query_all_stores(
+        data=data
+    )
+
+    clusters = await query_clusters(
+        data=data
+    )
+
+    items = await build_root_cluster_items(
+        clusters=clusters,
+        stores=stores,
+    )
+
+    page_items, page, total_pages = paginate(
+        items,
+        page=0,
+        page_size=PAGE_SIZE,
+    )
+
+    await safe_edit(
+        callback,
+        text=(
+            "\u23f0 <b>\u041a\u043b\u0430\u0441\u0442\u0435\u0440\u0438</b>\n\n"
+            f"\u0423\u0441\u044c\u043e\u0433\u043e: "
+            f"<b>{len(items)}</b>\n\n"
+            f"\u2705 \u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043e: "
+            f"<b>{result.created_count}</b>\n"
+            f"\u2139\ufe0f \u0412\u0436\u0435 "
+            f"\u0456\u0441\u043d\u0443\u0432\u0430\u043b\u043e: "
+            f"<b>{result.existing_count}</b>"
+        ),
+        reply_markup=build_keyboard(
+            root_admin_clusters_keyboard,
+            clusters=page_items,
+            page=page,
+            total_pages=total_pages,
+        ),
+    )
+
 
 
 # =========================================================

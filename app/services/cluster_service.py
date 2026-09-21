@@ -490,6 +490,20 @@ class ClusterService:
             code=normalized_code,
         )
 
+        deadline_datetime = (
+            datetime.combine(
+                date(2000, 1, 1),
+                normalized_time,
+            )
+            + timedelta(
+                minutes=control_deadline_minutes
+            )
+        )
+
+        opening_control_deadline = (
+            deadline_datetime.time()
+        )
+
         payload = {
             "name": normalized_name,
             "title": normalized_name,
@@ -499,6 +513,10 @@ class ClusterService:
 
             "opening_time": normalized_time,
             "start_time": normalized_time,
+
+            "opening_control_deadline": (
+                opening_control_deadline
+            ),
 
             "hour": normalized_time.hour,
             "opening_hour": (
