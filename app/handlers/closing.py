@@ -2479,8 +2479,6 @@ async def closing_receipt_message(
 
         return
 
-    await state.clear()
-
     current = await get_closing_status(
         store_id=store_id,
         user=user,
@@ -2491,43 +2489,88 @@ async def closing_receipt_message(
         current
     )
 
-    receipt_file = result_receipt_file_id(
-        current
+    receipt_file = (
+        result_receipt_file_id(
+            current
+        )
+        or file_id
     )
 
-    await message.answer(
-        "✅ <b>Чек отримано.</b>",
-        reply_markup=(
-            receipt_received_keyboard(
-                store_id=store_id
+    if amount is None:
+        await message.answer(
+            "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+            "\u0432\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 "
+            "\u0441\u0443\u043c\u0443 \u043a\u0430\u0441\u0438."
+        )
+        return
+
+    try:
+        completed = await complete_closing(
+            store_id=store_id,
+            report_id=report_id,
+            user=user,
+            data=data,
+            cash_amount=amount,
+            receipt_file_id=receipt_file,
+        )
+
+    except Exception:
+        logger.exception(
+            "Automatic closing completion failed: "
+            "store_id=%s report_id=%s",
+            store_id,
+            report_id,
+        )
+
+        await message.answer(
+            "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+            "\u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0438 "
+            "\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f."
+        )
+        return
+
+    if not result_success(
+        completed
+    ):
+        await message.answer(
+            "\u274c "
+            + escape(
+                str(
+                    result_message(
+                        completed
+                    )
+                    or "\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+                    "\u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0438 "
+                    "\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f."
+                )
             )
-        ),
+        )
+        return
+
+    await state.clear()
+
+    current = await get_closing_status(
+        store_id=store_id,
+        user=user,
+        data=data,
     )
 
     text = await build_closing_status_text(
         store_id=store_id,
-        result=current,
+        result=(
+            current
+            or completed
+        ),
         data=data,
     )
 
     await message.answer(
-        text,
-        reply_markup=(
-            closing_status_keyboard(
-                store_id=store_id,
-                has_cash=(
-                    amount is not None
-                ),
-                has_receipt=bool(
-                    receipt_file
-                ),
-                can_confirm=(
-                    amount is not None
-                    and bool(
-                        receipt_file
-                    )
-                ),
-            )
+        "\u2705 <b>\u0417\u043c\u0456\u043d\u0443 "
+        "\u0443\u0441\u043f\u0456\u0448\u043d\u043e "
+        "\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e.</b>\n\n"
+        + text,
+        reply_markup=closing_success_keyboard(
+            store_id=store_id
         ),
     )
 
