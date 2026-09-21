@@ -199,107 +199,25 @@ def store_main_keyboard(
     state: StoreMenuState,
 ) -> InlineKeyboardMarkup:
     """
-    Головне меню торгової точки.
-
-    Кнопки змінюються залежно від того,
-    що ТТ уже зробила сьогодні.
+    Store main menu.
     """
 
     rows: list[
         list[InlineKeyboardButton]
     ] = []
 
-    # -----------------------------------------------------
-    # НЕ ВІДКРИТО
-    # -----------------------------------------------------
-
-    if (
-        state.state
-        == StoreDayState.NOT_OPENED
-    ):
-        rows.append(
-            [
-                opening_button(
-                    store_id=state.store_id
-                )
-            ]
-        )
-
-        rows.append(
-            [
-                opening_status_button(
-                    store_id=state.store_id
-                )
-            ]
-        )
-
-    # -----------------------------------------------------
-    # ВІДКРИТО
-    # -----------------------------------------------------
-
-    elif state.state in {
-        StoreDayState.OPENED_ON_TIME,
-        StoreDayState.OPENED_LATE,
-    }:
-        rows.append(
-            [
-                inline_button(
-                    text="✅ Магазин відкритий",
-                    callback=OpeningCallback(
-                        action=OpeningAction.STATUS,
-                        store_id=state.store_id,
-                    ),
-                )
-            ]
-        )
-
-        rows.append(
-            [
-                closing_button(
-                    store_id=state.store_id
-                )
-            ]
-        )
-
-    # -----------------------------------------------------
-    # ЗАКРИТТЯ В ПРОЦЕСІ
-    # -----------------------------------------------------
-
-    elif (
-        state.state
-        == StoreDayState.CLOSING_STARTED
-    ):
-        rows.append(
-            [
-                inline_button(
-                    text="🌙 Продовжити закриття",
-                    callback=ClosingCallback(
-                        action=ClosingAction.STATUS,
-                        store_id=state.store_id,
-                    ),
-                )
-            ]
-        )
-
-    # -----------------------------------------------------
-    # ЗАКРИТО
-    # -----------------------------------------------------
-
-    elif (
-        state.state
-        == StoreDayState.CLOSED
-    ):
-        rows.append(
-            [
-                inline_button(
-                    text="✅ Зміна завершена",
-                    callback=ClosingCallback(
-                        action=ClosingAction.STATUS,
-                        store_id=state.store_id,
-                    ),
-                )
-            ]
-        )
+    rows.append(
+        [
+            opening_button(
+                store_id=state.store_id,
+                text="\U0001f305 \u0412\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+            closing_button(
+                store_id=state.store_id,
+                text="\U0001f319 \u0417\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+            ),
+        ]
+    )
 
     # -----------------------------------------------------
     # STATUS
@@ -1038,20 +956,6 @@ def store_today_report_keyboard(
     rows: list[
         list[InlineKeyboardButton]
     ] = []
-
-    if not is_closed:
-        rows.append(
-            [
-                opening_button(
-                    store_id=store_id,
-                    text="?? ????????",
-                ),
-                closing_button(
-                    store_id=store_id,
-                    text="?? ???????",
-                ),
-            ]
-        )
 
     rows.append(
         [
