@@ -213,7 +213,7 @@ class StoreRepository(BaseRepository[Store]):
         *,
         store_number: int,
         city: str,
-        address: str,
+        address: str | None,
         bush_id: int | None = None,
         cluster_id: int | None = None,
         name: str | None = None,
@@ -243,9 +243,8 @@ class StoreRepository(BaseRepository[Store]):
             field_name="Місто",
         )
 
-        normalized_address = self.normalize_required_text(
-            address,
-            field_name="Адреса",
+        normalized_address = self.normalize_optional_text(
+            address
         )
 
         if (
