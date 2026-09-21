@@ -693,10 +693,8 @@ class InviteService:
         activation = (
             await self.invoke_repository(
                 method_names=(
-                    "activate_invite",
-                    "activate",
-                    "consume_invite",
-                    "consume",
+                    "activate_raw_token",
+                    "activate_start_payload",
                 ),
                 token=payload.token,
                 raw_token=payload.token,
