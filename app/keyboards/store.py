@@ -1039,21 +1039,17 @@ def store_today_report_keyboard(
         list[InlineKeyboardButton]
     ] = []
 
-    if not is_opened:
+    if not is_closed:
         rows.append(
             [
                 opening_button(
-                    store_id=store_id
-                )
-            ]
-        )
-
-    elif not is_closed:
-        rows.append(
-            [
+                    store_id=store_id,
+                    text="?? ????????",
+                ),
                 closing_button(
-                    store_id=store_id
-                )
+                    store_id=store_id,
+                    text="?? ???????",
+                ),
             ]
         )
 
