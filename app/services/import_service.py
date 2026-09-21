@@ -2669,7 +2669,7 @@ class ImportService:
 
         action = (
             self.resolve_audit_action(
-                "update",
+                "updated",
                 "import",
                 "changed",
             )
@@ -3446,7 +3446,7 @@ class ImportService:
 
         result = cls.resolve_enum_member(
             AuditAction,
-            "update",
+            "updated",
             "changed",
             default=None,
         )
