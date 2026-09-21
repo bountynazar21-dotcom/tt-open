@@ -1119,7 +1119,7 @@ class CashService:
 
         if for_update:
             statement = (
-                statement.with_for_update()
+                statement.with_for_update(of=ClosingReport)
             )
 
         report = (
