@@ -927,6 +927,8 @@ class InviteAction(StrEnum):
 
     LIST = "ls"
 
+    BULK_STORE = "bst"
+
     CREATE = "new"
 
     REVOKE = "del"

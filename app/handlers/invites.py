@@ -57,7 +57,7 @@ from app.handlers.store import (
     store_title,
 )
 
-from app.keyboards import (
+from app.keyboards.callbacks import (
     InviteAction,
     InviteCallback,
 )
