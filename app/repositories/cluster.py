@@ -233,7 +233,7 @@ class ClusterRepository(BaseRepository[Cluster]):
             default_closing_time=(
                 normalized_closing_time
             ),
-            default_closing_deadline=(
+            default_closing_control_deadline=(
                 normalized_closing_deadline
             ),
         )
