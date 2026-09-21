@@ -26,6 +26,8 @@ from app.keyboards import (
     MainMenuCallback,
     OpeningAction,
     OpeningCallback,
+    ClosingAction,
+    ClosingCallback,
     RootAdminAction,
     RootAdminCallback,
     StoreAction,
@@ -591,26 +593,19 @@ def build_role_home_keyboard(
                 [
                     [
                         inline_button(
-                            text="🏪 Моя ТТ",
-                            callback=StoreCallback(
-                                action=(
-                                    StoreAction.VIEW
-                                ),
-                                store_id=store_id,
-                                page=0,
-                            ),
-                        )
-                    ],
-                    [
-                        inline_button(
-                            text="🌅 Відкриття",
+                            text="\U0001f305 \u0412\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f",
                             callback=OpeningCallback(
-                                action=(
-                                    OpeningAction.MENU
-                                ),
+                                action=OpeningAction.MENU,
                                 store_id=store_id,
                             ),
-                        )
+                        ),
+                        inline_button(
+                            text="\U0001f319 \u0417\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+                            callback=ClosingCallback(
+                                action=ClosingAction.MENU,
+                                store_id=store_id,
+                            ),
+                        ),
                     ],
                 ]
             )
