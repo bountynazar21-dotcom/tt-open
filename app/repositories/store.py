@@ -296,7 +296,7 @@ class StoreRepository(BaseRepository[Store]):
             city=normalized_city,
             address=normalized_address,
             phone=self.normalize_optional_text(phone),
-            format=self.normalize_optional_text(
+            store_format=self.normalize_optional_text(
                 store_format
             ),
             timezone=normalized_timezone,
@@ -375,7 +375,7 @@ class StoreRepository(BaseRepository[Store]):
             )
 
         if store_format is not None:
-            store.format = (
+            store.store_format = (
                 self.normalize_optional_text(
                     store_format
                 )
