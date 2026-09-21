@@ -143,24 +143,11 @@ class InviteRepository:
 
         if for_update:
             statement = (
-                statement
-                .options(
-                    lazyload(
-                        InviteLink.bush
-                    ),
-                    lazyload(
-                        InviteLink.store
-                    ),
-                    lazyload(
-                        InviteLink.created_by
-                    ),
-                    lazyload(
-                        InviteLink.revoked_by
-                    ),
-                    lazyload(
-                        InviteLink.usages
-                    ),
+                select(InviteLink)
+                .where(
+                    InviteLink.id == invite_id
                 )
+                .limit(1)
                 .with_for_update(
                     of=InviteLink
                 )
