@@ -214,9 +214,25 @@ class AccessMiddleware(
             getattr(user, "status", None),
         )
 
+        message_event = getattr(
+            event,
+            "message",
+            None,
+        )
+
         event_text = (
             getattr(event, "text", None)
             or getattr(event, "caption", None)
+            or getattr(
+                message_event,
+                "text",
+                None,
+            )
+            or getattr(
+                message_event,
+                "caption",
+                None,
+            )
             or ""
         ).strip()
 
