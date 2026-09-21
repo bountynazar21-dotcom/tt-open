@@ -16,6 +16,8 @@ from aiogram.types import (
 
 from app.database.models.user import User as DatabaseUser
 
+from app.services.file_service import FileCategory
+
 from app.handlers.bush_admin import (
     build_keyboard,
     create_model,
@@ -3359,20 +3361,430 @@ async def import_file_message(
         ),
     )
 
-    await state.clear()
+    await state.set_state(None)
+
+    try:
+        preview, import_filename = await _build_import_preview(
+            state=state,
+            data=data,
+            user=user,
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Import preview failed after upload"
+        )
+
+        await message.answer(
+            "? <b>?? ??????? ????????? ????.</b>\n\n"
+            f"<code>{escape(str(error))}</code>",
+            reply_markup=build_keyboard(
+                root_admin_import_keyboard
+            ),
+        )
+
+        return
 
     await message.answer(
-        "✅ <b>Файл отримано.</b>\n\n"
-        f"📄 {escape(document.file_name or 'Excel')}\n\n"
-        "Файл готовий до preview.",
-        reply_markup=(
-            build_keyboard(
-                root_admin_import_preview_keyboard,
-                token=0,
-                filename=(
-                    document.file_name
+        _import_preview_text(
+            preview,
+            import_filename,
+        ),
+        reply_markup=build_keyboard(
+            root_admin_import_preview_keyboard,
+            token=0,
+            has_errors=(
+                preview.invalid_count > 0
+            ),
+        ),
+    )
+
+
+async def _build_import_preview(
+    *,
+    state: FSMContext,
+    data: dict[str, Any],
+    user: DatabaseUser,
+) -> tuple[Any, str]:
+    """
+    ?????????? Excel ? Telegram
+    ? ????? preview.
+    """
+
+    state_data = await state.get_data()
+
+    file_id = str(
+        state_data.get(
+            "import_file_id"
+        )
+        or ""
+    ).strip()
+
+    filename = str(
+        state_data.get(
+            "import_filename"
+        )
+        or "import.xlsx"
+    ).strip()
+
+    if not file_id:
+        raise ValueError(
+            "???? ??????? ?? ????????. "
+            "?????????? Excel ?? ???."
+        )
+
+    file_service = get_service(
+        data,
+        "files",
+        "file",
+    )
+
+    if file_service is None:
+        raise RuntimeError(
+            "FileService ???????????."
+        )
+
+    import_service = get_service(
+        data,
+        "imports",
+    )
+
+    if import_service is None:
+        raise RuntimeError(
+            "ImportService ???????????."
+        )
+
+    downloaded = (
+        await file_service.download_file(
+            file_id=file_id,
+            category=FileCategory.IMPORT,
+            preferred_name=filename,
+        )
+    )
+
+    preview = (
+        await import_service.preview_downloaded(
+            actor=user,
+            downloaded=downloaded,
+        )
+    )
+
+    return preview, filename
+
+
+def _import_preview_text(
+    preview: Any,
+    filename: str,
+) -> str:
+    """
+    ????? preview ???????.
+    """
+
+    lines = [
+        "?? <b>Preview ???????</b>",
+        "",
+        f"?? {escape(filename)}",
+        "",
+        (
+            "?? ??????: "
+            f"<b>{preview.total_rows}</b>"
+        ),
+        (
+            "? ????????: "
+            f"<b>{preview.create_count}</b>"
+        ),
+        (
+            "?? ???????: "
+            f"<b>{preview.update_count}</b>"
+        ),
+        (
+            "? ??? ????: "
+            f"<b>{preview.unchanged_count}</b>"
+        ),
+        (
+            "? ?????????: "
+            f"<b>{preview.ignored_count}</b>"
+        ),
+        (
+            "? ???????: "
+            f"<b>{preview.invalid_count}</b>"
+        ),
+    ]
+
+    issues = list(
+        preview.issues
+        or ()
+    )
+
+    if issues:
+        lines.extend(
+            [
+                "",
+                "?? <b>????????:</b>",
+            ]
+        )
+
+        for issue in issues[:8]:
+            prefix = (
+                f"????? {issue.row_number}: "
+                if issue.row_number
+                else ""
+            )
+
+            lines.append(
+                f"? {prefix}"
+                f"{escape(str(issue.message))}"
+            )
+
+        if len(issues) > 8:
+            lines.append(
+                f"? ??? {len(issues) - 8}"
+            )
+
+    return "\n".join(
+        lines
+    )
+
+
+@router.callback_query(
+    ImportCallback.filter(
+        F.action
+        == ImportAction.PREVIEW
+    )
+)
+async def import_preview_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    Preview ????????? Excel.
+    """
+
+    user = await require_root(
+        callback,
+        data=data,
+    )
+
+    if user is None:
+        return
+
+    await callback.answer()
+
+    try:
+        preview, filename = (
+            await _build_import_preview(
+                state=state,
+                data=data,
+                user=user,
+            )
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Import preview failed"
+        )
+
+        await safe_edit(
+            callback,
+            text=(
+                "? <b>Preview "
+                "?? ????????.</b>\n\n"
+                f"<code>"
+                f"{escape(str(error))}"
+                f"</code>"
+            ),
+            reply_markup=build_keyboard(
+                root_admin_import_keyboard
+            ),
+        )
+
+        return
+
+    await safe_edit(
+        callback,
+        text=_import_preview_text(
+            preview,
+            filename,
+        ),
+        reply_markup=build_keyboard(
+            root_admin_import_preview_keyboard,
+            token=0,
+            has_errors=(
+                preview.invalid_count > 0
+            ),
+        ),
+    )
+
+
+async def _apply_import(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    data: dict[str, Any],
+    allow_partial: bool,
+) -> None:
+    """
+    ????????? ????? preview ? ??.
+    """
+
+    user = await require_root(
+        callback,
+        data=data,
+    )
+
+    if user is None:
+        return
+
+    await callback.answer()
+
+    try:
+        preview, filename = (
+            await _build_import_preview(
+                state=state,
+                data=data,
+                user=user,
+            )
+        )
+
+        import_service = get_service(
+            data,
+            "imports",
+        )
+
+        if import_service is None:
+            raise RuntimeError(
+                "ImportService ???????????."
+            )
+
+        result = (
+            await import_service.apply_preview(
+                actor=user,
+                preview=preview,
+                allow_partial=allow_partial,
+                reason=(
+                    "?????? ???????? ????? "
+                    "????? Telegram"
                 ),
             )
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Import apply failed"
+        )
+
+        await safe_edit(
+            callback,
+            text=(
+                "? <b>?????? "
+                "?? ????????.</b>\n\n"
+                f"<code>"
+                f"{escape(str(error))}"
+                f"</code>"
+            ),
+            reply_markup=build_keyboard(
+                root_admin_import_keyboard
+            ),
+        )
+
+        return
+
+    await state.clear()
+
+    await safe_edit(
+        callback,
+        text=(
+            "? <b>?????? ?????????.</b>\n\n"
+            f"?? {escape(filename)}\n\n"
+            "?? ?????????: "
+            f"<b>{result.attempted_count}</b>\n"
+            "? ???????: "
+            f"<b>{result.success_count}</b>\n"
+            "? ????????: "
+            f"<b>{result.created_count}</b>\n"
+            "?? ????????: "
+            f"<b>{result.updated_count}</b>\n"
+            "? ?? ???????: "
+            f"<b>{result.failed_count}</b>"
+        ),
+        reply_markup=build_keyboard(
+            root_admin_import_keyboard
+        ),
+    )
+
+
+@router.callback_query(
+    ImportCallback.filter(
+        F.action
+        == ImportAction.APPLY
+    )
+)
+async def import_apply_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    await _apply_import(
+        callback,
+        state,
+        data=data,
+        allow_partial=False,
+    )
+
+
+@router.callback_query(
+    ImportCallback.filter(
+        F.action
+        == ImportAction.APPLY_PARTIAL
+    )
+)
+async def import_apply_partial_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    await _apply_import(
+        callback,
+        state,
+        data=data,
+        allow_partial=True,
+    )
+
+
+@router.callback_query(
+    ImportCallback.filter(
+        F.action
+        == ImportAction.CANCEL
+    )
+)
+async def import_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    user = await require_root(
+        callback,
+        data=data,
+    )
+
+    if user is None:
+        return
+
+    await state.clear()
+
+    await callback.answer(
+        "?????? ?????????."
+    )
+
+    await safe_edit(
+        callback,
+        text=(
+            "? <b>?????? "
+            "?????????.</b>"
+        ),
+        reply_markup=build_keyboard(
+            root_admin_import_keyboard
         ),
     )
 
