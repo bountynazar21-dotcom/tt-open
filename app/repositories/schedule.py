@@ -151,7 +151,7 @@ class ScheduleRepository:
         )
 
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=StoreSchedule)
 
         result = await self.session.scalars(
             statement
