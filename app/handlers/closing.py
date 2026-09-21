@@ -1067,7 +1067,12 @@ async def save_receipt(
             "ClosingService недоступний."
         )
 
+    current_time = (
+        datetime.now().astimezone()
+    )
+
     payload = {
+        "current_time": current_time,
         "store_id": store_id,
 
         "report_id": report_id,
