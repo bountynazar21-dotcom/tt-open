@@ -194,7 +194,7 @@ class StoreRepository(BaseRepository[Store]):
         statement = (
             select(Store)
             .where(Store.id == store_id)
-            .with_for_update()
+            .with_for_update(of=Store)
             .limit(1)
         )
 
