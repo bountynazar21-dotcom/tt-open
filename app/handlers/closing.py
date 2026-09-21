@@ -2198,6 +2198,7 @@ async def cash_confirm_callback(
 
     await state.update_data(
         pending_cash_amount=None,
+        closing_cash_amount=str(amount),
         closing_store_id=store_id,
         closing_report_id=report_id,
     )
@@ -2488,6 +2489,20 @@ async def closing_receipt_message(
     amount = result_cash_amount(
         current
     )
+
+    if amount is None:
+        state_data = await state.get_data()
+        raw_amount = state_data.get(
+            "closing_cash_amount"
+        )
+
+        if raw_amount is not None:
+            try:
+                amount = Decimal(
+                    str(raw_amount)
+                )
+            except Exception:
+                amount = None
 
     receipt_file = (
         result_receipt_file_id(
