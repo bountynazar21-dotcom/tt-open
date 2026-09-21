@@ -187,9 +187,7 @@ class BindingRepository:
             ):
                 return existing_binding, False
 
-            existing_binding.reopen(
-                requested_at=requested_at
-            )
+            existing_binding.reopen_request()
 
             self.session.add(existing_binding)
             await self.session.flush()
@@ -200,7 +198,6 @@ class BindingRepository:
             user_id=user_id,
             store_id=store_id,
             status=BindingStatus.PENDING,
-            requested_at=requested_at,
         )
 
         self.session.add(binding)
@@ -345,9 +342,7 @@ class BindingRepository:
                 "відкривати повторно."
             )
 
-        binding.reopen(
-            requested_at=requested_at
-        )
+        binding.reopen_request()
 
         self.session.add(binding)
         await self.session.flush()
@@ -416,7 +411,7 @@ class BindingRepository:
         statement = (
             statement
             .order_by(
-                UserStoreBinding.requested_at.asc(),
+                UserStoreBinding.updated_at.asc(),
                 UserStoreBinding.id.asc(),
             )
             .offset(offset)
