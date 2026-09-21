@@ -958,6 +958,7 @@ async def register_opening(
         "checked_in_at": actual_time,
         "checkin_at": actual_time,
         "actual_time": actual_time,
+        "current_time": actual_time,
 
         "manual": manual,
         "is_manual": manual,
