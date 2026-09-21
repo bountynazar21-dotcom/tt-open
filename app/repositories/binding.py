@@ -73,7 +73,7 @@ class BindingRepository:
         )
 
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=UserStoreBinding)
 
         result = await self.session.scalars(
             statement
@@ -106,7 +106,7 @@ class BindingRepository:
         )
 
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=UserStoreBinding)
 
         result = await self.session.scalars(
             statement
@@ -761,7 +761,7 @@ class BindingRepository:
         )
 
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=UserBushBinding)
 
         result = await self.session.scalars(
             statement
@@ -794,7 +794,7 @@ class BindingRepository:
         )
 
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=UserBushBinding)
 
         result = await self.session.scalars(
             statement
