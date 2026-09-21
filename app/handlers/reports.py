@@ -73,6 +73,8 @@ from app.handlers.store import (
 )
 
 from app.keyboards import (
+    BushAction,
+    BushCallback,
     AuditActionCallback,
     AuditCallback,
     GroupAction,
@@ -187,6 +189,10 @@ class RootAdminStates(
     waiting_import_file = State()
 
     waiting_timezone = State()
+
+    waiting_bush_name = State()
+
+    waiting_bush_code = State()
 
 
 # =========================================================
@@ -656,6 +662,228 @@ async def set_setting_value(
                 continue
 
     return False
+
+
+# =========================================================
+# BUSH CREATE
+# =========================================================
+
+
+@router.callback_query(
+    BushCallback.filter(
+        F.action
+        == BushAction.CREATE
+    )
+)
+async def root_bush_create_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    ??????? ????????? ????.
+    """
+
+    user = await require_root(
+        callback,
+        data=data,
+    )
+
+    if user is None:
+        return
+
+    await callback.answer()
+
+    await state.clear()
+
+    await state.set_state(
+        RootAdminStates.waiting_bush_name
+    )
+
+    if callback.message is not None:
+        await callback.message.answer(
+            "?? <b>????????? ????</b>\n\n"
+            "??????? ????? ????.\n\n"
+            "?????????:\n"
+            "<code>??1</code>\n\n"
+            "??? ??????????: /cancel"
+        )
+
+
+@router.message(
+    RootAdminStates.waiting_bush_name
+)
+async def root_bush_name_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    ????? ?????? ????.
+    """
+
+    user = await require_root(
+        message,
+        data=data,
+    )
+
+    if user is None:
+        await state.clear()
+        return
+
+    text = (
+        message.text
+        or ""
+    ).strip()
+
+    if text.lower() in {
+        "/cancel",
+        "cancel",
+        "?????????",
+    }:
+        await state.clear()
+
+        await message.answer(
+            "? ????????? ???? ?????????."
+        )
+
+        return
+
+    if not text:
+        await message.answer(
+            "?? ??????? ????? ????."
+        )
+        return
+
+    await state.update_data(
+        bush_create_name=text,
+    )
+
+    await state.set_state(
+        RootAdminStates.waiting_bush_code
+    )
+
+    await message.answer(
+        "? ????? ?????????.\n\n"
+        "????? ??????? ??? ????.\n\n"
+        "?????????:\n"
+        "<code>HM1</code>\n"
+        "<code>HM2</code>\n"
+        "<code>VINNYTSIA</code>\n\n"
+        "??? ??????????: /cancel"
+    )
+
+
+@router.message(
+    RootAdminStates.waiting_bush_code
+)
+async def root_bush_code_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    ??? ? ???????? ????????? ????.
+    """
+
+    user = await require_root(
+        message,
+        data=data,
+    )
+
+    if user is None:
+        await state.clear()
+        return
+
+    code = (
+        message.text
+        or ""
+    ).strip()
+
+    if code.lower() in {
+        "/cancel",
+        "cancel",
+        "?????????",
+    }:
+        await state.clear()
+
+        await message.answer(
+            "? ????????? ???? ?????????."
+        )
+
+        return
+
+    if not code:
+        await message.answer(
+            "?? ??????? ??? ????."
+        )
+        return
+
+    state_data = await state.get_data()
+
+    name = str(
+        state_data.get(
+            "bush_create_name"
+        )
+        or ""
+    ).strip()
+
+    if not name:
+        await state.clear()
+
+        await message.answer(
+            "? ????? ???? ????????. "
+            "??????? ????????? ?? ???."
+        )
+
+        return
+
+    service = get_service(
+        data,
+        "bushes",
+        "bush",
+    )
+
+    if service is None:
+        await message.answer(
+            "? BushService ???????????."
+        )
+        return
+
+    try:
+        result = await service.create_bush(
+            actor=user,
+            name=name,
+            code=code,
+            reason=(
+                "????????? ???? "
+                "????? Telegram"
+            ),
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Bush creation failed"
+        )
+
+        await message.answer(
+            "? <b>?? ??????? ???????? ???.</b>\n\n"
+            f"<code>{escape(str(error))}</code>\n\n"
+            "????? ?????? ??? ?? ??? "
+            "??? /cancel."
+        )
+
+        return
+
+    await state.clear()
+
+    await message.answer(
+        "? <b>??? ????????.</b>\n\n"
+        f"?? ?????: <b>{escape(name)}</b>\n"
+        f"?? ???: <code>{escape(code)}</code>\n\n"
+        "??????????? ?? ?????? ????? "
+        "? ????????? ?? ???????."
+    )
 
 
 # =========================================================
