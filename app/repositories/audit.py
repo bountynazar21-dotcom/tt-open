@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
@@ -149,11 +149,15 @@ class AuditRepository(
                 field_name="ID користувача",
             )
 
-        if occurred_at is not None:
-            self.validate_aware_datetime(
-                occurred_at,
-                field_name="occurred_at",
-            )
+        resolved_occurred_at = (
+            occurred_at
+            or datetime.now(UTC)
+        )
+
+        self.validate_aware_datetime(
+            resolved_occurred_at,
+            field_name="occurred_at",
+        )
 
         normalized_old_values = (
             self.prepare_mapping(old_values)
@@ -305,16 +309,16 @@ class AuditRepository(
             ),
         )
 
-        if occurred_at is not None:
-            self.put_payload_value(
-                payload,
-                names=(
-                    "occurred_at",
-                    "event_at",
-                    "performed_at",
-                ),
-                value=occurred_at,
-            )
+        self.put_payload_value(
+            payload,
+            names=(
+                "occurred_at",
+                "event_at",
+                "performed_at",
+            ),
+            value=resolved_occurred_at,
+            required=True,
+        )
 
         entry = AuditLog(**payload)
 

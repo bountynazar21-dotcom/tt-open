@@ -671,8 +671,7 @@ async def set_setting_value(
 
 @router.callback_query(
     BushCallback.filter(
-        F.action
-        == BushAction.CREATE
+        F.action == BushAction.CREATE
     )
 )
 async def root_bush_create_callback(
@@ -680,10 +679,6 @@ async def root_bush_create_callback(
     state: FSMContext,
     **data: Any,
 ) -> None:
-    """
-    ??????? ????????? ????.
-    """
-
     user = await require_root(
         callback,
         data=data,
@@ -693,7 +688,6 @@ async def root_bush_create_callback(
         return
 
     await callback.answer()
-
     await state.clear()
 
     await state.set_state(
@@ -702,11 +696,14 @@ async def root_bush_create_callback(
 
     if callback.message is not None:
         await callback.message.answer(
-            "?? <b>????????? ????</b>\n\n"
-            "??????? ????? ????.\n\n"
-            "?????????:\n"
-            "<code>??1</code>\n\n"
-            "??? ??????????: /cancel"
+            "\U0001F33F <b>\u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f "
+            "\u043a\u0443\u0449\u0430</b>\n\n"
+            "\u0412\u0432\u0435\u0434\u0456\u0442\u044c "
+            "\u043d\u0430\u0437\u0432\u0443 \u043a\u0443\u0449\u0430.\n\n"
+            "\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434:\n"
+            "<code>\u0425\u041c1</code>\n\n"
+            "\u0414\u043b\u044f \u0441\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f: "
+            "/cancel"
         )
 
 
@@ -718,10 +715,6 @@ async def root_bush_name_message(
     state: FSMContext,
     **data: Any,
 ) -> None:
-    """
-    ????? ?????? ????.
-    """
-
     user = await require_root(
         message,
         data=data,
@@ -731,27 +724,24 @@ async def root_bush_name_message(
         await state.clear()
         return
 
-    text = (
-        message.text
-        or ""
-    ).strip()
+    text = (message.text or "").strip()
 
     if text.lower() in {
         "/cancel",
         "cancel",
-        "?????????",
     }:
         await state.clear()
 
         await message.answer(
-            "? ????????? ???? ?????????."
+            "\u274c \u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f "
+            "\u043a\u0443\u0449\u0430 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e."
         )
-
         return
 
     if not text:
         await message.answer(
-            "?? ??????? ????? ????."
+            "\u26a0\ufe0f \u0412\u0432\u0435\u0434\u0456\u0442\u044c "
+            "\u043d\u0430\u0437\u0432\u0443 \u043a\u0443\u0449\u0430."
         )
         return
 
@@ -764,13 +754,16 @@ async def root_bush_name_message(
     )
 
     await message.answer(
-        "? ????? ?????????.\n\n"
-        "????? ??????? ??? ????.\n\n"
-        "?????????:\n"
+        "\u2705 \u041d\u0430\u0437\u0432\u0443 "
+        "\u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u043e.\n\n"
+        "\u0422\u0435\u043f\u0435\u0440 \u0432\u0432\u0435\u0434\u0456\u0442\u044c "
+        "\u043a\u043e\u0434 \u043a\u0443\u0449\u0430.\n\n"
+        "\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434:\n"
         "<code>HM1</code>\n"
         "<code>HM2</code>\n"
         "<code>VINNYTSIA</code>\n\n"
-        "??? ??????????: /cancel"
+        "\u0414\u043b\u044f \u0441\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f: "
+        "/cancel"
     )
 
 
@@ -782,10 +775,6 @@ async def root_bush_code_message(
     state: FSMContext,
     **data: Any,
 ) -> None:
-    """
-    ??? ? ???????? ????????? ????.
-    """
-
     user = await require_root(
         message,
         data=data,
@@ -795,36 +784,31 @@ async def root_bush_code_message(
         await state.clear()
         return
 
-    code = (
-        message.text
-        or ""
-    ).strip()
+    code = (message.text or "").strip()
 
     if code.lower() in {
         "/cancel",
         "cancel",
-        "?????????",
     }:
         await state.clear()
 
         await message.answer(
-            "? ????????? ???? ?????????."
+            "\u274c \u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f "
+            "\u043a\u0443\u0449\u0430 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e."
         )
-
         return
 
     if not code:
         await message.answer(
-            "?? ??????? ??? ????."
+            "\u26a0\ufe0f \u0412\u0432\u0435\u0434\u0456\u0442\u044c "
+            "\u043a\u043e\u0434 \u043a\u0443\u0449\u0430."
         )
         return
 
     state_data = await state.get_data()
 
     name = str(
-        state_data.get(
-            "bush_create_name"
-        )
+        state_data.get("bush_create_name")
         or ""
     ).strip()
 
@@ -832,10 +816,12 @@ async def root_bush_code_message(
         await state.clear()
 
         await message.answer(
-            "? ????? ???? ????????. "
-            "??????? ????????? ?? ???."
+            "\u274c \u041d\u0430\u0437\u0432\u0443 \u043a\u0443\u0449\u0430 "
+            "\u0432\u0442\u0440\u0430\u0447\u0435\u043d\u043e. "
+            "\u041f\u043e\u0447\u043d\u0456\u0442\u044c "
+            "\u0441\u0442\u0432\u043e\u0440\u0435\u043d\u043d\u044f "
+            "\u0449\u0435 \u0440\u0430\u0437."
         )
-
         return
 
     service = get_service(
@@ -846,19 +832,16 @@ async def root_bush_code_message(
 
     if service is None:
         await message.answer(
-            "? BushService ???????????."
+            "\u274c BushService \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439."
         )
         return
 
     try:
-        result = await service.create_bush(
+        await service.create_bush(
             actor=user,
             name=name,
             code=code,
-            reason=(
-                "????????? ???? "
-                "????? Telegram"
-            ),
+            reason="Telegram bush creation",
         )
 
     except Exception as error:
@@ -867,22 +850,29 @@ async def root_bush_code_message(
         )
 
         await message.answer(
-            "? <b>?? ??????? ???????? ???.</b>\n\n"
+            "\u274c <b>\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+            "\u0441\u0442\u0432\u043e\u0440\u0438\u0442\u0438 "
+            "\u043a\u0443\u0449.</b>\n\n"
             f"<code>{escape(str(error))}</code>\n\n"
-            "????? ?????? ??? ?? ??? "
-            "??? /cancel."
+            "\u041c\u043e\u0436\u043d\u0430 \u0432\u0432\u0435\u0441\u0442\u0438 "
+            "\u043a\u043e\u0434 \u0449\u0435 \u0440\u0430\u0437 "
+            "\u0430\u0431\u043e /cancel."
         )
-
         return
 
     await state.clear()
 
     await message.answer(
-        "? <b>??? ????????.</b>\n\n"
-        f"?? ?????: <b>{escape(name)}</b>\n"
-        f"?? ???: <code>{escape(code)}</code>\n\n"
-        "??????????? ?? ?????? ????? "
-        "? ????????? ?? ???????."
+        "\u2705 <b>\u041a\u0443\u0449 "
+        "\u0441\u0442\u0432\u043e\u0440\u0435\u043d\u043e.</b>\n\n"
+        f"\U0001F33F \u041d\u0430\u0437\u0432\u0430: "
+        f"<b>{escape(name)}</b>\n"
+        f"\U0001F3F7\ufe0f \u041a\u043e\u0434: "
+        f"<code>{escape(code)}</code>\n\n"
+        "\u041d\u0430\u0442\u0438\u0441\u043d\u0456\u0442\u044c "
+        "\U0001F504 \u041e\u043d\u043e\u0432\u0438\u0442\u0438 "
+        "\u0443 \u0441\u043f\u0438\u0441\u043a\u0443 "
+        "\u043a\u0443\u0449\u0456\u0432."
     )
 
 
