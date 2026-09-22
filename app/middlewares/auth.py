@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from time import perf_counter
 
 import inspect
 from collections.abc import Awaitable, Callable
@@ -226,6 +228,8 @@ class AuthMiddleware(BaseMiddleware):
         if telegram_user.is_bot:
             return None
 
+        _auth_perf_start = perf_counter()
+
         resolution = (
             await self.resolve_or_create_user(
                 repositories=repositories,
@@ -233,16 +237,34 @@ class AuthMiddleware(BaseMiddleware):
             )
         )
 
+        _auth_perf_resolve = perf_counter()
+
         current_user = resolution.user
 
         bot_enabled = await self.is_bot_enabled(
             repositories
         )
 
+        _auth_perf_bot = perf_counter()
+
         maintenance_mode = (
             await self.is_maintenance_mode(
                 repositories
             )
+        )
+
+        _auth_perf_maintenance = perf_counter()
+
+        print(
+            "AUTH PERF | "
+            f"resolve_user="
+            f"{(_auth_perf_resolve - _auth_perf_start) * 1000:.1f}ms | "
+            f"bot_enabled="
+            f"{(_auth_perf_bot - _auth_perf_resolve) * 1000:.1f}ms | "
+            f"maintenance="
+            f"{(_auth_perf_maintenance - _auth_perf_bot) * 1000:.1f}ms | "
+            f"pre_handler_total="
+            f"{(_auth_perf_maintenance - _auth_perf_start) * 1000:.1f}ms"
         )
 
         is_root_admin = self.is_root_admin(
