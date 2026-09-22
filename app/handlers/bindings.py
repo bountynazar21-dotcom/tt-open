@@ -2053,10 +2053,6 @@ async def remove_binding_callback(
     callback_data: BindingCallback,
     **data: Any,
 ) -> None:
-    """
-    Видаляє/deactivates binding.
-    """
-
     actor = await require_manager(
         callback,
         data=data,
@@ -2065,77 +2061,82 @@ async def remove_binding_callback(
     if actor is None:
         return
 
+    bindings = await get_user_bindings(
+        target_user_id=callback_data.user_id,
+        actor=actor,
+        data=data,
+    )
+
+    binding = next(
+        (
+            item
+            for item in bindings
+            if binding_id(item)
+            == callback_data.binding_id
+        ),
+        None,
+    )
+
+    if binding is None:
+        await callback.answer(
+            "\u274c \u041f\u0440\u0438\u0432'\u044f\u0437\u043a\u0443 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
+            show_alert=True,
+        )
+        return
+
+    scope = binding_scope(binding)
+
     payload = {
-        "binding_id":
-            callback_data.binding_id,
-
-        "user_id":
-            callback_data.user_id,
-
-        "target_user_id":
-            callback_data.user_id,
-
-        "target_id":
-            callback_data.target_id,
-
-        "actor":
-            actor,
-
-        "current_user":
-            actor,
-
-        "actor_id":
-            getattr(
-                actor,
-                "id",
-                None,
-            ),
+        "actor": actor,
+        "user_id": callback_data.user_id,
+        "reason": "Removed by manager",
     }
+
+    if scope == "store":
+        payload["store_id"] = callback_data.target_id
+        method_names = (
+            "deactivate_store_binding",
+        )
+    elif scope == "bush":
+        payload["bush_id"] = callback_data.target_id
+        method_names = (
+            "deactivate_bush_binding",
+        )
+    else:
+        await callback.answer(
+            "\u274c \u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0438\u0439 \u0442\u0438\u043f \u043f\u0440\u0438\u0432'\u044f\u0437\u043a\u0438.",
+            show_alert=True,
+        )
+        return
 
     try:
         result = await call_binding_operation(
-            method_names=(
-                "deactivate_binding",
-                "remove_binding",
-                "delete_binding",
-                "unbind",
-                "remove",
-            ),
+            method_names=method_names,
             payload=payload,
             data=data,
         )
-
     except Exception:
         await callback.answer(
-            "Не вдалося видалити "
-            "прив'язку.",
+            "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0432\u0438\u0434\u0430\u043b\u0438\u0442\u0438 \u043f\u0440\u0438\u0432'\u044f\u0437\u043a\u0443.",
             show_alert=True,
         )
-
         return
 
-    if not operation_success(
-        result
-    ):
+    if not operation_success(result):
         await callback.answer(
-            operation_message(
-                result
-            )
-            or "Операція не виконана.",
+            operation_message(result)
+            or "\u274c \u041e\u043f\u0435\u0440\u0430\u0446\u0456\u044f \u043d\u0435 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0430.",
             show_alert=True,
         )
-
         return
 
     await callback.answer(
-        "Прив'язку видалено ✅"
+        "\u2705 \u0414\u043e\u0441\u0442\u0443\u043f \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u043e."
     )
 
     await show_bindings(
         callback,
-        target_user_id=(
-            callback_data.user_id
-        ),
+        target_user_id=callback_data.user_id,
         actor=actor,
         data=data,
     )
