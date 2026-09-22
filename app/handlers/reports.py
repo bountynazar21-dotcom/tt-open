@@ -1056,6 +1056,10 @@ async def build_root_store_item(
     user: DatabaseUser | None,
     data: dict[str, Any],
     context: str = "general",
+    opening: Any = None,
+    closing: Any = None,
+    cluster: Any = None,
+    preloaded: bool = False,
 ) -> RootStoreItem:
     """
     Store -> RootStoreItem.
@@ -1065,17 +1069,18 @@ async def build_root_store_item(
         store
     )
 
-    opening = await get_opening_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+    if not preloaded:
+        opening = await get_opening_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
 
-    closing = await get_closing_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+        closing = await get_closing_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
 
     active = is_store_active(
         store
@@ -1151,10 +1156,11 @@ async def build_root_store_item(
         store
     )
 
-    cluster = await load_cluster(
-        cluster_id=cluster_id,
-        data=data,
-    )
+    if not preloaded:
+        cluster = await load_cluster(
+            cluster_id=cluster_id,
+            data=data,
+        )
 
     cluster_text = (
         cluster_time_text(
@@ -1194,42 +1200,60 @@ async def build_root_store_items(
     user: DatabaseUser | None,
     data: dict[str, Any],
     context: str = "general",
-) -> list[
-    RootStoreItem
-]:
-    """
-    Усі RootStoreItem.
-    """
+    openings_by_store: dict[int, Any] | None = None,
+    closings_by_store: dict[int, Any] | None = None,
+    clusters_by_id: dict[int, Any] | None = None,
+) -> list[RootStoreItem]:
+    """Build RootStoreItem objects."""
 
-    result: list[
-        RootStoreItem
-    ] = []
+    preloaded = (
+        openings_by_store is not None
+        and closings_by_store is not None
+        and clusters_by_id is not None
+    )
+
+    result: list[RootStoreItem] = []
 
     for store in stores:
+        store_id = object_id(store)
+        cluster_id = store_cluster_id(store)
+
         try:
             item = await build_root_store_item(
                 store=store,
                 user=user,
                 data=data,
                 context=context,
+                opening=(
+                    openings_by_store.get(store_id)
+                    if openings_by_store is not None
+                    else None
+                ),
+                closing=(
+                    closings_by_store.get(store_id)
+                    if closings_by_store is not None
+                    else None
+                ),
+                cluster=(
+                    clusters_by_id.get(cluster_id)
+                    if clusters_by_id is not None
+                    else None
+                ),
+                preloaded=preloaded,
             )
 
         except Exception:
             logger.exception(
-                "Failed building RootStoreItem: "
-                "store_id=%s",
-                object_id(
-                    store
-                ),
+                "Failed building RootStoreItem: store_id=%s",
+                store_id,
             )
-
             continue
 
-        result.append(
-            item
-        )
+        result.append(item)
 
     return result
+
+
 
 
 async def build_root_bush_items(
@@ -1456,12 +1480,67 @@ async def build_root_dashboard(
         )
     ]
 
+    repositories = data.get("repositories")
+
+    opening_records: list[Any] = []
+    closing_records: list[Any] = []
+
+    if repositories is not None:
+        opening_repository = getattr(
+            repositories,
+            "openings",
+            None,
+        )
+        closing_repository = getattr(
+            repositories,
+            "closings",
+            None,
+        )
+
+        # Use the same local business date as the existing
+        # opening/closing handlers.
+        from app.handlers.opening import now_local
+
+        business_date = now_local().date()
+
+        if opening_repository is not None:
+            opening_records = (
+                await opening_repository.get_for_date(
+                    business_date=business_date,
+                )
+            )
+
+        if closing_repository is not None:
+            closing_records = (
+                await closing_repository.get_for_date(
+                    business_date=business_date,
+                )
+            )
+
+    openings_by_store = {
+        int(record.store_id): record
+        for record in opening_records
+    }
+
+    closings_by_store = {
+        int(record.store_id): record
+        for record in closing_records
+    }
+
+    clusters_by_id = {
+        object_id(cluster): cluster
+        for cluster in clusters
+    }
+
     opening_items = (
         await build_root_store_items(
             stores=active_stores,
             user=user,
             data=data,
             context="opening",
+            openings_by_store=openings_by_store,
+            closings_by_store=closings_by_store,
+            clusters_by_id=clusters_by_id,
         )
     )
 
@@ -1471,6 +1550,9 @@ async def build_root_dashboard(
             user=user,
             data=data,
             context="closing",
+            openings_by_store=openings_by_store,
+            closings_by_store=closings_by_store,
+            clusters_by_id=clusters_by_id,
         )
     )
 
@@ -2661,9 +2743,7 @@ async def load_user(
     user_id: int,
     data: dict[str, Any],
 ) -> Any | None:
-    """
-    User by internal DB id.
-    """
+    """Load one user through the exact UserService API."""
 
     service = get_service(
         data,
@@ -2671,51 +2751,31 @@ async def load_user(
         "user",
     )
 
-    payload = {
-        "user_id": user_id,
-        "id": user_id,
-    }
+    actor = get_database_user(data)
 
     if service is not None:
-        for method_name in (
+        method = getattr(
+            service,
             "get_user",
-            "get_user_or_raise",
-            "get_by_id",
-            "get",
-        ):
-            method = getattr(
-                service,
-                method_name,
-                None,
-            )
-
-            if not callable(
-                method
-            ):
-                continue
-
-            try:
-                result = await call_method(
-                    method,
-                    payload,
-                )
-
-            except Exception:
-                continue
-
-            if result is not None:
-                return result
-
-    repositories = get_repositories(
-        data
-    )
-
-    repository = (
-        getattr(
-            repositories,
-            "users",
             None,
         )
+
+        if callable(method):
+            try:
+                return await method(
+                    actor=actor,
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.exception(
+                    "UserService.get_user failed: user_id=%s",
+                    user_id,
+                )
+
+    repositories = get_repositories(data)
+
+    repository = (
+        getattr(repositories, "users", None)
         if repositories
         else None
     )
@@ -2723,41 +2783,23 @@ async def load_user(
     if repository is None:
         return None
 
-    for method_name in (
+    method = getattr(
+        repository,
         "get_by_id",
-        "get",
-        "find_by_id",
-    ):
-        method = getattr(
-            repository,
-            method_name,
-            None,
+        None,
+    )
+
+    if not callable(method):
+        return None
+
+    try:
+        return await method(user_id)
+    except Exception:
+        logger.exception(
+            "UserRepository.get_by_id failed: user_id=%s",
+            user_id,
         )
-
-        if not callable(
-            method
-        ):
-            continue
-
-        try:
-            result = await call_method(
-                method,
-                payload,
-            )
-
-        except Exception:
-            continue
-
-        if result is not None:
-            return result
-
-    return None
-
-
-# =========================================================
-# USER CARD
-# =========================================================
-
+        return None
 
 async def show_user_card(
     callback: CallbackQuery,

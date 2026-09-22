@@ -733,18 +733,40 @@ async def query_all_stores(
 # =========================================================
 
 
+def store_code(store: Any) -> str:
+    """Return normalized store code."""
+
+    value = first_attr(
+        store,
+        "code",
+        "store_code",
+        "number",
+        "store_number",
+        default="",
+    )
+
+    return str(value or "").strip()
+
+
+def store_name(store: Any) -> str:
+    """Return normalized store name."""
+
+    value = first_attr(
+        store,
+        "name",
+        "store_name",
+        "title",
+        default="",
+    )
+
+    return str(value or "").strip()
+
+
 async def query_network_users(
     *,
     data: dict[str, Any],
 ) -> list[Any]:
-    """
-    Користувачі мережі.
-    """
-
-    payload = {
-        "active_only": False,
-        "include_inactive": True,
-    }
+    """Load network users through the exact UserService API."""
 
     service = get_service(
         data,
@@ -752,149 +774,65 @@ async def query_network_users(
         "user",
     )
 
+    actor = get_database_user(data)
+
     if service is not None:
-        for method_name in (
-            "list_users",
-            "list_all",
-            "get_all",
-            "list",
-            "search",
-            "all",
-        ):
-            method = getattr(
-                service,
-                method_name,
-                None,
-            )
+        method = getattr(
+            service,
+            "get_users",
+            None,
+        )
 
-            if not callable(
-                method
-            ):
-                continue
-
+        if callable(method):
             try:
-                result = await call_method(
-                    method,
-                    payload,
+                result = await method(
+                    actor=actor,
+                    filter_type=None,
+                    store_id=None,
+                    bush_id=None,
+                    limit=500,
+                    offset=0,
+                )
+                return unwrap_collection(result)
+            except Exception:
+                logger.exception(
+                    "UserService.get_users failed"
                 )
 
-            except Exception:
-                continue
+    repositories = data.get("repositories")
 
-            items = unwrap_collection(
-                result
-            )
-
-            if items:
-                return items
-
-    repositories = data.get(
-        "repositories"
-    )
-
-    if repositories is None:
-        return []
-
-    repository = getattr(
-        repositories,
-        "users",
-        None,
+    repository = (
+        getattr(repositories, "users", None)
+        if repositories is not None
+        else None
     )
 
     if repository is None:
         return []
 
-    for method_name in (
-        "list_all",
-        "get_all",
-        "list",
-        "all",
-    ):
-        method = getattr(
-            repository,
-            method_name,
-            None,
-        )
-
-        if not callable(
-            method
-        ):
-            continue
-
-        try:
-            result = await call_method(
-                method,
-                payload,
-            )
-
-        except Exception:
-            continue
-
-        items = unwrap_collection(
-            result
-        )
-
-        if items:
-            return items
-
-    return []
-
-
-# =========================================================
-# STORE LABELS
-# =========================================================
-
-
-def store_code(
-    store: Any,
-) -> str:
-    """
-    Код ТТ.
-    """
-
-    store_id = object_id(
-        store
+    # Repository has no canonical list-all method.
+    # search() is its supported collection API.
+    method = getattr(
+        repository,
+        "search",
+        None,
     )
 
-    code = first_attr(
-        store,
-        "code",
-        "store_code",
-        default=None,
-    )
+    if not callable(method):
+        return []
 
-    if code:
-        return str(
-            code
+    try:
+        result = await method(
+            "",
+            active_only=False,
+            limit=500,
         )
-
-    return (
-        f"ТТ-{store_id}"
-    )
-
-
-def store_name(
-    store: Any,
-) -> str | None:
-    """
-    Назва ТТ.
-    """
-
-    value = first_attr(
-        store,
-        "name",
-        "title",
-        "address",
-        default=None,
-    )
-
-    if value:
-        return str(
-            value
+        return unwrap_collection(result)
+    except Exception:
+        logger.exception(
+            "UserRepository.search failed"
         )
-
-    return None
-
+        return []
 
 async def store_bush_name(
     *,
