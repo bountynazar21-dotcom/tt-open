@@ -2800,9 +2800,9 @@ def is_root_admin(
     **kwargs,
 ) -> bool:
     """
-    ????????? ROOT_ADMIN:
-    1. ?? ????? ???????????;
-    2. ?? Telegram ID ?? settings.
+    Перевіряє ROOT_ADMIN:
+    1. за роллю користувача;
+    2. за Telegram ID у settings.
     """
 
     from app.handlers.bush_admin import normalized_role

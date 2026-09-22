@@ -7,9 +7,7 @@ from contextlib import suppress
 
 import uvicorn
 from fastapi import FastAPI
-from sqlalchemy import text
 
-from app.database.session import engine
 
 from app.bot import (
     get_bot_and_dispatcher,
@@ -48,93 +46,6 @@ async def lifespan(
         "Starting %s",
         settings.app_name,
     )
-
-    # =====================================================
-    # TEMP: PRODUCTION AUDIT SCHEMA DIAGNOSTIC
-    # =====================================================
-
-    try:
-        async with engine.connect() as connection:
-            result = await connection.execute(
-                text(
-                    '''
-                    SELECT
-                        ordinal_position,
-                        column_name,
-                        data_type,
-                        udt_name,
-                        is_nullable,
-                        column_default
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public'
-                      AND table_name = 'audit_logs'
-                    ORDER BY ordinal_position
-                    '''
-                )
-            )
-
-            rows = result.fetchall()
-
-            logger.warning(
-                "AUDIT_SCHEMA_BEGIN"
-            )
-
-            if not rows:
-                logger.warning(
-                    "AUDIT_SCHEMA_TABLE_NOT_FOUND"
-                )
-
-            for row in rows:
-                logger.warning(
-                    "AUDIT_SCHEMA_COLUMN | "
-                    "position=%s | "
-                    "name=%s | "
-                    "type=%s | "
-                    "udt=%s | "
-                    "nullable=%s | "
-                    "default=%s",
-                    row.ordinal_position,
-                    row.column_name,
-                    row.data_type,
-                    row.udt_name,
-                    row.is_nullable,
-                    row.column_default,
-                )
-
-            result = await connection.execute(
-                text(
-                    '''
-                    SELECT
-                        con.conname,
-                        pg_get_constraintdef(con.oid)
-                    FROM pg_constraint AS con
-                    JOIN pg_class AS rel
-                      ON rel.oid = con.conrelid
-                    JOIN pg_namespace AS nsp
-                      ON nsp.oid = rel.relnamespace
-                    WHERE nsp.nspname = 'public'
-                      AND rel.relname = 'audit_logs'
-                    ORDER BY con.conname
-                    '''
-                )
-            )
-
-            for row in result:
-                logger.warning(
-                    "AUDIT_SCHEMA_CONSTRAINT | "
-                    "name=%s | definition=%s",
-                    row[0],
-                    row[1],
-                )
-
-            logger.warning(
-                "AUDIT_SCHEMA_END"
-            )
-
-    except Exception:
-        logger.exception(
-            "AUDIT_SCHEMA_DIAGNOSTIC_FAILED"
-        )
 
     # =====================================================
     # BOT INSTANCE

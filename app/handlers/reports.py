@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from time import perf_counter
 
 import inspect
 import logging
@@ -1458,28 +1457,18 @@ async def build_root_dashboard(
     Повний network dashboard.
     """
 
-    _perf_start = perf_counter()
-
     stores = await query_all_stores(
         data=data
     )
-    _perf_stores = perf_counter()
-
     bushes = await query_network_bushes(
         data=data
     )
-    _perf_bushes = perf_counter()
-
     clusters = await query_clusters(
         data=data
     )
-    _perf_clusters = perf_counter()
-
     users = await query_network_users(
         data=data
     )
-    _perf_users = perf_counter()
-
     active_stores = [
         store
         for store in stores
@@ -1518,8 +1507,6 @@ async def build_root_dashboard(
                 )
             )
 
-    _perf_opening = perf_counter()
-
     if repositories is not None:
         if closing_repository is not None:
             closing_records = (
@@ -1527,8 +1514,6 @@ async def build_root_dashboard(
                     business_date=business_date,
                 )
             )
-
-    _perf_closing = perf_counter()
 
     openings_by_store = {
         int(record.store_id): record
@@ -1556,8 +1541,6 @@ async def build_root_dashboard(
             clusters_by_id=clusters_by_id,
         )
     )
-
-    _perf_opening_items = perf_counter()
 
     closing_items = (
         await build_root_store_items(
@@ -1594,8 +1577,6 @@ async def build_root_dashboard(
         if item.state
         == RootStoreState.WAITING_OPENING
     )
-
-    _perf_closing_items = perf_counter()
 
     closed_count = sum(
         1
@@ -1645,15 +1626,11 @@ async def build_root_dashboard(
         in BLOCKED_STATUS_NAMES
     )
 
-    _perf_before_settings = perf_counter()
-
     bot_enabled = await get_setting_bool(
         key="bot_enabled",
         data=data,
         default=True,
     )
-
-    _perf_bot_setting = perf_counter()
 
     maintenance_enabled = (
         await get_setting_bool(
@@ -1663,23 +1640,6 @@ async def build_root_dashboard(
         )
     )
 
-    _perf_maintenance_setting = perf_counter()
-
-    print(
-        "ROOT DASH PERF | "
-        f"stores={(_perf_stores - _perf_start) * 1000:.1f}ms | "
-        f"bushes={(_perf_bushes - _perf_stores) * 1000:.1f}ms | "
-        f"clusters={(_perf_clusters - _perf_bushes) * 1000:.1f}ms | "
-        f"users={(_perf_users - _perf_clusters) * 1000:.1f}ms | "
-        f"opening_bulk={(_perf_opening - _perf_users) * 1000:.1f}ms | "
-        f"closing_bulk={(_perf_closing - _perf_opening) * 1000:.1f}ms | "
-        f"opening_items={(_perf_opening_items - _perf_closing) * 1000:.1f}ms | "
-        f"closing_items={(_perf_closing_items - _perf_opening_items) * 1000:.1f}ms | "
-        f"counts={(_perf_before_settings - _perf_closing_items) * 1000:.1f}ms | "
-        f"bot_setting={(_perf_bot_setting - _perf_before_settings) * 1000:.1f}ms | "
-        f"maintenance_setting={(_perf_maintenance_setting - _perf_bot_setting) * 1000:.1f}ms | "
-        f"total={(_perf_maintenance_setting - _perf_start) * 1000:.1f}ms"
-    )
 
     state = RootAdminDashboardState(
         total_stores=len(
@@ -3961,7 +3921,7 @@ async def import_file_message(
         )
 
         await message.answer(
-            "? <b>?? ??????? ????????? ????.</b>\n\n"
+            "❌ <b>Не вдалося перевірити файл.</b>\n\n"
             f"<code>{escape(str(error))}</code>",
             reply_markup=build_keyboard(
                 root_admin_import_keyboard
@@ -3992,8 +3952,8 @@ async def _build_import_preview(
     user: DatabaseUser,
 ) -> tuple[Any, str]:
     """
-    ?????????? Excel ? Telegram
-    ? ????? preview.
+    Завантажує Excel із Telegram
+    та створює preview.
     """
 
     state_data = await state.get_data()
@@ -4014,8 +3974,8 @@ async def _build_import_preview(
 
     if not file_id:
         raise ValueError(
-            "???? ??????? ?? ????????. "
-            "?????????? Excel ?? ???."
+            "Файл імпорту не знайдено. "
+            "Завантажте Excel ще раз."
         )
 
     file_service = get_service(
@@ -4026,7 +3986,7 @@ async def _build_import_preview(
 
     if file_service is None:
         raise RuntimeError(
-            "FileService ???????????."
+            "FileService недоступний."
         )
 
     import_service = get_service(
@@ -4036,7 +3996,7 @@ async def _build_import_preview(
 
     if import_service is None:
         raise RuntimeError(
-            "ImportService ???????????."
+            "ImportService недоступний."
         )
 
     downloaded = (
@@ -4062,36 +4022,36 @@ def _import_preview_text(
     filename: str,
 ) -> str:
     """
-    ????? preview ???????.
+    Формує текст preview імпорту.
     """
 
     lines = [
-        "?? <b>Preview ???????</b>",
+        "📋 <b>Preview імпорту</b>",
         "",
         f"?? {escape(filename)}",
         "",
         (
-            "?? ??????: "
+            "📊 Усього рядків: "
             f"<b>{preview.total_rows}</b>"
         ),
         (
-            "? ????????: "
+            "➕ Буде створено: "
             f"<b>{preview.create_count}</b>"
         ),
         (
-            "?? ???????: "
+            "🔄 Буде оновлено: "
             f"<b>{preview.update_count}</b>"
         ),
         (
-            "? ??? ????: "
+            "✅ Без змін: "
             f"<b>{preview.unchanged_count}</b>"
         ),
         (
-            "? ?????????: "
+            "⏭️ Проігноровано: "
             f"<b>{preview.ignored_count}</b>"
         ),
         (
-            "? ???????: "
+            "❌ Помилок: "
             f"<b>{preview.invalid_count}</b>"
         ),
     ]
@@ -4105,13 +4065,13 @@ def _import_preview_text(
         lines.extend(
             [
                 "",
-                "?? <b>????????:</b>",
+                "⚠️ <b>Помилки:</b>",
             ]
         )
 
         for issue in issues[:8]:
             prefix = (
-                f"????? {issue.row_number}: "
+                f"Рядок {issue.row_number}: "
                 if issue.row_number
                 else ""
             )
@@ -4143,7 +4103,7 @@ async def import_preview_callback(
     **data: Any,
 ) -> None:
     """
-    Preview ????????? Excel.
+    Preview імпортованого Excel.
     """
 
     user = await require_root(
@@ -4174,7 +4134,7 @@ async def import_preview_callback(
             callback,
             text=(
                 "? <b>Preview "
-                "?? ????????.</b>\n\n"
+                "не вдалося створити.</b>\n\n"
                 f"<code>"
                 f"{escape(str(error))}"
                 f"</code>"
@@ -4210,7 +4170,7 @@ async def _apply_import(
     allow_partial: bool,
 ) -> None:
     """
-    ????????? ????? preview ? ??.
+    Застосовує поточний preview до бази даних.
     """
 
     user = await require_root(
@@ -4239,7 +4199,7 @@ async def _apply_import(
 
         if import_service is None:
             raise RuntimeError(
-                "ImportService ???????????."
+                "ImportService недоступний."
             )
 
         result = (
@@ -4248,8 +4208,8 @@ async def _apply_import(
                 preview=preview,
                 allow_partial=allow_partial,
                 reason=(
-                    "?????? ???????? ????? "
-                    "????? Telegram"
+                    "Ручний імпорт торгових точок "
+                    "через Telegram"
                 ),
             )
         )
@@ -4262,8 +4222,8 @@ async def _apply_import(
         await safe_edit(
             callback,
             text=(
-                "? <b>?????? "
-                "?? ????????.</b>\n\n"
+                "❌ <b>Імпорт "
+                "не вдався.</b>\n\n"
                 f"<code>"
                 f"{escape(str(error))}"
                 f"</code>"
@@ -4280,17 +4240,17 @@ async def _apply_import(
     await safe_edit(
         callback,
         text=(
-            "? <b>?????? ?????????.</b>\n\n"
+            "✅ <b>Імпорт завершено.</b>\n\n"
             f"?? {escape(filename)}\n\n"
-            "?? ?????????: "
+            "📊 Оброблено: "
             f"<b>{result.attempted_count}</b>\n"
-            "? ???????: "
+            "✅ Успішно: "
             f"<b>{result.success_count}</b>\n"
-            "? ????????: "
+            "➕ Створено: "
             f"<b>{result.created_count}</b>\n"
-            "?? ????????: "
+            "🔄 Оновлено: "
             f"<b>{result.updated_count}</b>\n"
-            "? ?? ???????: "
+            "❌ З помилкою: "
             f"<b>{result.failed_count}</b>"
         ),
         reply_markup=build_keyboard(
@@ -4359,14 +4319,14 @@ async def import_cancel_callback(
     await state.clear()
 
     await callback.answer(
-        "?????? ?????????."
+        "Імпорт скасовано."
     )
 
     await safe_edit(
         callback,
         text=(
-            "? <b>?????? "
-            "?????????.</b>"
+            "✅ <b>Імпорт "
+            "скасовано.</b>"
         ),
         reply_markup=build_keyboard(
             root_admin_import_keyboard

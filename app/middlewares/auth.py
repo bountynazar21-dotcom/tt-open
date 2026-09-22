@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from time import perf_counter
 
 import inspect
 from collections.abc import Awaitable, Callable
@@ -37,7 +36,7 @@ HandlerType: TypeAlias = Callable[
 
 class AuthState(StrEnum):
     """
-    РџРѕС‚РѕС‡РЅРёР№ СЃС‚Р°РЅ Р°РІС‚РѕСЂРёР·Р°С†С–С— РєРѕСЂРёСЃС‚СѓРІР°С‡Р°.
+    Поточний стан авторизації користувача.
     """
 
     ACTIVE = "active"
@@ -55,7 +54,7 @@ class AuthState(StrEnum):
 @dataclass(slots=True, frozen=True)
 class AuthMiddlewareContext:
     """
-    РљРѕРЅС‚РµРєСЃС‚ Р°РІС‚РѕСЂРёР·Р°С†С–С— РѕРґРЅРѕРіРѕ Telegram update.
+    Контекст авторизації одного Telegram update.
     """
 
     telegram_user: TelegramUser | None
@@ -84,7 +83,7 @@ class AuthMiddlewareContext:
 @dataclass(slots=True, frozen=True)
 class UserResolutionResult:
     """
-    Р РµР·СѓР»СЊС‚Р°С‚ РїРѕС€СѓРєСѓ Р°Р±Рѕ СЃС‚РІРѕСЂРµРЅРЅСЏ РєРѕСЂРёСЃС‚СѓРІР°С‡Р°.
+    Результат пошуку або створення користувача.
     """
 
     user: User
@@ -95,45 +94,45 @@ class UserResolutionResult:
 
 class AuthMiddleware(BaseMiddleware):
     """
-    Middleware Р°РІС‚РѕСЂРёР·Р°С†С–С— Telegram-РєРѕСЂРёСЃС‚СѓРІР°С‡Р°.
+    Middleware авторизації Telegram-користувача.
 
-    РџСЂР°С†СЋС” РїС–СЃР»СЏ DatabaseMiddleware.
+    Працює після DatabaseMiddleware.
 
-    РЈ РєРѕР¶РµРЅ handler РїРµСЂРµРґР°С”:
+    У кожен handler передає:
 
         current_user: User
         auth_context: AuthMiddlewareContext
         is_new_user: bool
 
-    Р›РѕРіС–РєР°:
+    Логіка:
 
-    1. РћС‚СЂРёРјСѓС” Telegram-РєРѕСЂРёСЃС‚СѓРІР°С‡Р°.
-    2. РЁСѓРєР°С” Р№РѕРіРѕ РІ PostgreSQL.
-    3. РЎС‚РІРѕСЂСЋС”, СЏРєС‰Рѕ Р№РѕРіРѕ С‰Рµ РЅРµРјР°С”.
-    4. РћРЅРѕРІР»СЋС” Telegram-РїСЂРѕС„С–Р»СЊ.
-    5. РџРµСЂРµРІС–СЂСЏС” Р±Р»РѕРєСѓРІР°РЅРЅСЏ.
-    6. РџРµСЂРµРІС–СЂСЏС” С‚РµС…РЅС–С‡РЅРёР№ СЂРµР¶РёРј.
-    7. Р—Р°РїСѓСЃРєР°С” handler.
+    1. Отримує Telegram-користувача.
+    2. Шукає його в PostgreSQL.
+    3. Створює, якщо його ще немає.
+    4. Оновлює Telegram-профіль.
+    5. Перевіряє блокування.
+    6. Перевіряє технічний режим.
+    7. Запускає handler.
     """
 
     DEFAULT_BLOCKED_MESSAGE = (
-        "в›” <b>Р”РѕСЃС‚СѓРї РґРѕ Р±РѕС‚Р° РѕР±РјРµР¶РµРЅРѕ.</b>\n\n"
-        "Р”Р»СЏ СѓС‚РѕС‡РЅРµРЅРЅСЏ Р·РІРµСЂРЅС–С‚СЊСЃСЏ РґРѕ Р°РґРјС–РЅС–СЃС‚СЂР°С‚РѕСЂР°."
+        "⛔ <b>Доступ до бота обмежено.</b>\n\n"
+        "Для уточнення зверніться до адміністратора."
     )
 
     DEFAULT_INACTIVE_MESSAGE = (
-        "вљ пёЏ <b>Р’Р°С€ РѕР±Р»С–РєРѕРІРёР№ Р·Р°РїРёСЃ РЅРµР°РєС‚РёРІРЅРёР№.</b>\n\n"
-        "Р—РІРµСЂРЅС–С‚СЊСЃСЏ РґРѕ РІС–РґРїРѕРІС–РґР°Р»СЊРЅРѕРіРѕ Р°РґРјС–РЅС–СЃС‚СЂР°С‚РѕСЂР°."
+        "⚠️ <b>Ваш обліковий запис неактивний.</b>\n\n"
+        "Зверніться до відповідального адміністратора."
     )
 
     DEFAULT_BOT_DISABLED_MESSAGE = (
-        "рџ”ґ <b>Р‘РѕС‚ С‚РёРјС‡Р°СЃРѕРІРѕ РІРёРјРєРЅРµРЅРёР№.</b>\n\n"
-        "РЎРїСЂРѕР±СѓР№С‚Рµ СЃРєРѕСЂРёСЃС‚Р°С‚РёСЃСЏ РЅРёРј РїС–Р·РЅС–С€Рµ."
+        "🔴 <b>Бот тимчасово вимкнений.</b>\n\n"
+        "Спробуйте скористатися ним пізніше."
     )
 
     DEFAULT_MAINTENANCE_MESSAGE = (
-        "рџ›  <b>РЈ Р±РѕС‚С– РїСЂРѕРІРѕРґСЏС‚СЊСЃСЏ С‚РµС…РЅС–С‡РЅС– СЂРѕР±РѕС‚Рё.</b>\n\n"
-        "РЎРїСЂРѕР±СѓР№С‚Рµ С‰Рµ СЂР°Р· С‚СЂРѕС…Рё РїС–Р·РЅС–С€Рµ."
+        "🛠 <b>У боті проводяться технічні роботи.</b>\n\n"
+        "Спробуйте ще раз трохи пізніше."
     )
 
     def __init__(
@@ -190,7 +189,7 @@ class AuthMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         """
-        РђРІС‚РѕСЂРёР·СѓС” РєРѕСЂРёСЃС‚СѓРІР°С‡Р° РїРµСЂРµРґ handler.
+        Авторизує користувача перед handler.
         """
 
         repositories = (
@@ -228,8 +227,6 @@ class AuthMiddleware(BaseMiddleware):
         if telegram_user.is_bot:
             return None
 
-        _auth_perf_start = perf_counter()
-
         resolution = (
             await self.resolve_or_create_user(
                 repositories=repositories,
@@ -237,15 +234,11 @@ class AuthMiddleware(BaseMiddleware):
             )
         )
 
-        _auth_perf_resolve = perf_counter()
-
         current_user = resolution.user
 
         bot_enabled = await self.is_bot_enabled(
             repositories
         )
-
-        _auth_perf_bot = perf_counter()
 
         maintenance_mode = (
             await self.is_maintenance_mode(
@@ -253,19 +246,6 @@ class AuthMiddleware(BaseMiddleware):
             )
         )
 
-        _auth_perf_maintenance = perf_counter()
-
-        print(
-            "AUTH PERF | "
-            f"resolve_user="
-            f"{(_auth_perf_resolve - _auth_perf_start) * 1000:.1f}ms | "
-            f"bot_enabled="
-            f"{(_auth_perf_bot - _auth_perf_resolve) * 1000:.1f}ms | "
-            f"maintenance="
-            f"{(_auth_perf_maintenance - _auth_perf_bot) * 1000:.1f}ms | "
-            f"pre_handler_total="
-            f"{(_auth_perf_maintenance - _auth_perf_start) * 1000:.1f}ms"
-        )
 
         is_root_admin = self.is_root_admin(
             current_user
@@ -424,7 +404,7 @@ class AuthMiddleware(BaseMiddleware):
         )
 
     # ==========================================
-    # Р—РђРџРЈРЎРљ HANDLER
+    # ЗАПУСК HANDLER
     # ==========================================
 
     async def call_handler(
@@ -436,7 +416,7 @@ class AuthMiddleware(BaseMiddleware):
         context: AuthMiddlewareContext,
     ) -> Any:
         """
-        РџРµСЂРµРґР°С” Р°РІС‚РѕСЂРёР·Р°С†С–Р№РЅС– РґР°РЅС– Сѓ handler.
+        Передає авторизаційні дані у handler.
         """
 
         dependencies: dict[str, Any] = {
@@ -482,7 +462,7 @@ class AuthMiddleware(BaseMiddleware):
                     )
 
     # ==========================================
-    # РџРћРЁРЈРљ РђР‘Рћ РЎРўР’РћР Р•РќРќРЇ
+    # ПОШУК АБО СТВОРЕННЯ
     # ==========================================
 
     async def resolve_or_create_user(
@@ -492,7 +472,7 @@ class AuthMiddleware(BaseMiddleware):
         telegram_user: TelegramUser,
     ) -> UserResolutionResult:
         """
-        РЁСѓРєР°С” РєРѕСЂРёСЃС‚СѓРІР°С‡Р° Р°Р±Рѕ СЃС‚РІРѕСЂСЋС” РЅРѕРІРѕРіРѕ.
+        Шукає користувача або створює нового.
         """
 
         repository_result = (
@@ -517,7 +497,7 @@ class AuthMiddleware(BaseMiddleware):
         telegram_user: TelegramUser,
     ) -> UserResolutionResult | None:
         """
-        РџСЂРѕР±СѓС” РІРёРєРѕСЂРёСЃС‚Р°С‚Рё РіРѕС‚РѕРІРёР№ РјРµС‚РѕРґ
+        Пробує використати готовий метод
         UserRepository.
         """
 
@@ -620,10 +600,10 @@ class AuthMiddleware(BaseMiddleware):
         telegram_user: TelegramUser,
     ) -> UserResolutionResult:
         """
-        Р РµР·РµСЂРІРЅРёР№ SQLAlchemy upsert.
+        Резервний SQLAlchemy upsert.
 
-        Р’РёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ, СЏРєС‰Рѕ UserRepository
-        РЅРµ РјС–СЃС‚РёС‚СЊ СЃРїРµС†С–Р°Р»СЊРЅРѕРіРѕ РјРµС‚РѕРґСѓ.
+        Використовується, якщо UserRepository
+        не містить спеціального методу.
         """
 
         statement = (
@@ -642,8 +622,8 @@ class AuthMiddleware(BaseMiddleware):
         if user is None:
             if not self.auto_create_users:
                 raise PermissionError(
-                    "РљРѕСЂРёСЃС‚СѓРІР°С‡Р° РЅРµ Р·РЅР°Р№РґРµРЅРѕ, "
-                    "Р° Р°РІС‚РѕРјР°С‚РёС‡РЅРµ СЃС‚РІРѕСЂРµРЅРЅСЏ РІРёРјРєРЅРµРЅРµ."
+                    "Користувача не знайдено, "
+                    "а автоматичне створення вимкнене."
                 )
 
             user = self.create_user_model(
@@ -687,7 +667,7 @@ class AuthMiddleware(BaseMiddleware):
         )
 
     # ==========================================
-    # РЎРўР’РћР Р•РќРќРЇ РњРћР”Р•Р›Р† USER
+    # СТВОРЕННЯ МОДЕЛІ USER
     # ==========================================
 
     def create_user_model(
@@ -695,13 +675,13 @@ class AuthMiddleware(BaseMiddleware):
         telegram_user: TelegramUser,
     ) -> User:
         """
-        РЎС‚РІРѕСЂСЋС” РЅРѕРІРѕРіРѕ РєРѕСЂРёСЃС‚СѓРІР°С‡Р°.
+        Створює нового користувача.
 
-        РќРѕРІРёР№ РєРѕСЂРёСЃС‚СѓРІР°С‡ РѕС‚СЂРёРјСѓС”:
+        Новий користувач отримує:
 
-        - СЂРѕР»СЊ STORE_USER;
-        - СЃС‚Р°С‚СѓСЃ PENDING, СЏРєС‰Рѕ РІС–РЅ С” РІ enum;
-        - Telegram-РїСЂРѕС„С–Р»СЊ.
+        - роль STORE_USER;
+        - статус PENDING, якщо він є в enum;
+        - Telegram-профіль.
         """
 
         available_columns = {
@@ -760,7 +740,7 @@ class AuthMiddleware(BaseMiddleware):
         )
 
     # ==========================================
-    # РћРќРћР’Р›Р•РќРќРЇ РџР РћР¤Р†Р›Р®
+    # ОНОВЛЕННЯ ПРОФІЛЮ
     # ==========================================
 
     def update_user_profile(
@@ -770,7 +750,7 @@ class AuthMiddleware(BaseMiddleware):
         telegram_user: TelegramUser,
     ) -> bool:
         """
-        РћРЅРѕРІР»СЋС” Р·РјС–РЅРµРЅС– РїРѕР»СЏ Telegram-РїСЂРѕС„С–Р»СЋ.
+        Оновлює змінені поля Telegram-профілю.
         """
 
         changed = False
@@ -838,7 +818,7 @@ class AuthMiddleware(BaseMiddleware):
     def update_last_seen(
         user: User,
     ) -> None:
-        """РћРЅРѕРІР»СЋС” РґР°С‚Сѓ РѕСЃС‚Р°РЅРЅСЊРѕС— Р°РєС‚РёРІРЅРѕСЃС‚С–."""
+        """Оновлює дату останньої активності."""
 
         now = datetime.now(UTC)
 
@@ -865,7 +845,7 @@ class AuthMiddleware(BaseMiddleware):
         result: Any,
     ) -> UserResolutionResult | None:
         """
-        Р РѕР·Р±РёСЂР°С” СЂС–Р·РЅС– С„РѕСЂРјР°С‚Рё СЂРµР·СѓР»СЊС‚Р°С‚С–РІ.
+        Розбирає різні формати результатів.
         """
 
         if isinstance(result, User):
@@ -941,7 +921,7 @@ class AuthMiddleware(BaseMiddleware):
         self,
         repositories: Repositories,
     ) -> bool:
-        """Р§Рё СѓРІС–РјРєРЅРµРЅРёР№ Р±РѕС‚."""
+        """Чи увімкнений бот."""
 
         settings = repositories.settings
 
@@ -974,7 +954,7 @@ class AuthMiddleware(BaseMiddleware):
         self,
         repositories: Repositories,
     ) -> bool:
-        """Р§Рё СѓРІС–РјРєРЅРµРЅРёР№ С‚РµС…РЅС–С‡РЅРёР№ СЂРµР¶РёРј."""
+        """Чи увімкнений технічний режим."""
 
         settings = repositories.settings
 
@@ -1008,8 +988,8 @@ class AuthMiddleware(BaseMiddleware):
         repositories: Repositories,
     ) -> str | None:
         """
-        РџРѕРІРµСЂС‚Р°С” РЅР°Р»Р°С€С‚РѕРІР°РЅРёР№ С‚РµРєСЃС‚
-        С‚РµС…РЅС–С‡РЅРѕРіРѕ СЂРµР¶РёРјСѓ.
+        Повертає налаштований текст
+        технічного режиму.
         """
 
         settings = repositories.settings
@@ -1069,7 +1049,7 @@ class AuthMiddleware(BaseMiddleware):
     def is_root_admin(
         user: User,
     ) -> bool:
-        """Р§Рё С” РєРѕСЂРёСЃС‚СѓРІР°С‡ ROOT_ADMIN."""
+        """Чи є користувач ROOT_ADMIN."""
 
         role = getattr(
             user,
@@ -1112,7 +1092,7 @@ class AuthMiddleware(BaseMiddleware):
     def is_blocked_user(
         user: User,
     ) -> bool:
-        """Р§Рё Р·Р°Р±Р»РѕРєРѕРІР°РЅРёР№ РєРѕСЂРёСЃС‚СѓРІР°С‡."""
+        """Чи заблокований користувач."""
 
         if bool(
             getattr(
@@ -1142,7 +1122,7 @@ class AuthMiddleware(BaseMiddleware):
     def is_inactive_user(
         user: User,
     ) -> bool:
-        """Р§Рё РґРµР°РєС‚РёРІРѕРІР°РЅРёР№ РєРѕСЂРёСЃС‚СѓРІР°С‡."""
+        """Чи деактивований користувач."""
 
         status_values = (
             AuthMiddleware
@@ -1163,7 +1143,7 @@ class AuthMiddleware(BaseMiddleware):
     def user_status_values(
         user: User,
     ) -> set[str]:
-        """РџРѕРІРµСЂС‚Р°С” РЅР°Р·РІСѓ С– Р·РЅР°С‡РµРЅРЅСЏ СЃС‚Р°С‚СѓСЃСѓ."""
+        """Повертає назву і значення статусу."""
 
         status = getattr(
             user,
@@ -1192,13 +1172,13 @@ class AuthMiddleware(BaseMiddleware):
         }
 
     # ==========================================
-    # РЎРўРђРќР”РђР РўРќРђ Р РћР›Р¬ Р† РЎРўРђРўРЈРЎ
+    # СТАНДАРТНА РОЛЬ І СТАТУС
     # ==========================================
 
     @staticmethod
     def default_user_role(
     ) -> UserRole | None:
-        """РЎС‚Р°РЅРґР°СЂС‚РЅР° СЂРѕР»СЊ РЅРѕРІРѕРіРѕ РєРѕСЂРёСЃС‚СѓРІР°С‡Р°."""
+        """Стандартна роль нового користувача."""
 
         return AuthMiddleware.resolve_enum_member(
             UserRole,
@@ -1212,10 +1192,10 @@ class AuthMiddleware(BaseMiddleware):
     def default_user_status(
     ) -> UserStatus | None:
         """
-        РЎС‚Р°РЅРґР°СЂС‚РЅРёР№ СЃС‚Р°С‚СѓСЃ РЅРѕРІРѕРіРѕ РєРѕСЂРёСЃС‚СѓРІР°С‡Р°.
+        Стандартний статус нового користувача.
 
-        РЎРїРѕС‡Р°С‚РєСѓ С€СѓРєР°С”РјРѕ PENDING.
-        РЇРєС‰Рѕ Р№РѕРіРѕ РЅРµРјР°С” вЂ” ACTIVE.
+        Спочатку шукаємо PENDING.
+        Якщо його немає — ACTIVE.
         """
 
         pending = (
@@ -1244,7 +1224,7 @@ class AuthMiddleware(BaseMiddleware):
         *names: str,
         default: Any = None,
     ) -> Any:
-        """РЁСѓРєР°С” enum Р·Р° РЅР°Р·РІРѕСЋ Р°Р±Рѕ Р·РЅР°С‡РµРЅРЅСЏРј."""
+        """Шукає enum за назвою або значенням."""
 
         normalized_names = {
             name.strip().lower()
@@ -1266,7 +1246,7 @@ class AuthMiddleware(BaseMiddleware):
         return default
 
     # ==========================================
-    # Р’Р†Р”РџРћР’Р†Р”Р¬ РџР Рћ РћР‘РњР•Р–Р•РќРќРЇ
+    # ВІДПОВІДЬ ПРО ОБМЕЖЕННЯ
     # ==========================================
 
     async def answer_restriction(
@@ -1276,13 +1256,13 @@ class AuthMiddleware(BaseMiddleware):
         text: str,
     ) -> None:
         """
-        Р’С–РґРїРѕРІС–РґР°С” РєРѕСЂРёСЃС‚СѓРІР°С‡Сѓ Р±РµР· Р·Р°РїСѓСЃРєСѓ handler.
+        Відповідає користувачу без запуску handler.
         """
 
         if isinstance(event, CallbackQuery):
             try:
                 await event.answer(
-                    "Р”РѕСЃС‚СѓРї С‚РёРјС‡Р°СЃРѕРІРѕ РѕР±РјРµР¶РµРЅРѕ",
+                    "Доступ тимчасово обмежено",
                     show_alert=True,
                 )
             except Exception:
@@ -1320,7 +1300,7 @@ class AuthMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> TelegramUser | None:
         """
-        Р’РёР·РЅР°С‡Р°С” Р°РІС‚РѕСЂР° Telegram update.
+        Визначає автора Telegram update.
         """
 
         event_from_user = data.get(
@@ -1356,7 +1336,7 @@ class AuthMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Repositories:
         """
-        РћС‚СЂРёРјСѓС” Repositories С–Р· DatabaseMiddleware.
+        Отримує Repositories із DatabaseMiddleware.
         """
 
         repositories = data.get(
@@ -1368,9 +1348,9 @@ class AuthMiddleware(BaseMiddleware):
             Repositories,
         ):
             raise RuntimeError(
-                "AuthMiddleware РїРѕРІРёРЅРµРЅ РїСЂР°С†СЋРІР°С‚Рё "
-                "РїС–СЃР»СЏ DatabaseMiddleware. "
-                "РЈ aiogram data РІС–РґСЃСѓС‚РЅС–Р№ Repositories."
+                "AuthMiddleware повинен працювати "
+                "після DatabaseMiddleware. "
+                "У aiogram data відсутній Repositories."
             )
 
         return repositories
@@ -1385,8 +1365,8 @@ class AuthMiddleware(BaseMiddleware):
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        РџСЂРёР±РёСЂР°С” Р°СЂРіСѓРјРµРЅС‚Рё, СЏРєРёС… РЅРµРјР°С”
-        Сѓ СЃРёРіРЅР°С‚СѓСЂС– РјРµС‚РѕРґСѓ.
+        Прибирає аргументи, яких немає
+        у сигнатурі методу.
         """
 
         signature = inspect.signature(
