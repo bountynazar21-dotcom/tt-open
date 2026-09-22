@@ -2840,10 +2840,26 @@ async def show_user_card(
         )
 
     else:
+        normalized = str(status or "").strip().lower()
+
+        is_blocked = normalized in {
+            "blocked",
+            "banned",
+        }
+
+        is_active = (
+            normalized in {
+                "active",
+                "approved",
+            }
+            and not is_blocked
+        )
+
         markup = build_keyboard(
             root_admin_user_keyboard,
             user_id=item.user_id,
-            user=item,
+            is_active=is_active,
+            is_blocked=is_blocked,
         )
 
     await safe_edit(
