@@ -705,6 +705,45 @@ class UserRepository(BaseRepository[User]):
     # ПОШУК
     # ==========================================
 
+    async def list_all(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[User]:
+        """Return users without building per-user access views."""
+
+        if offset < 0:
+            raise ValueError(
+                "Offset cannot be negative."
+            )
+
+        if limit is not None and limit <= 0:
+            raise ValueError(
+                "Limit must be positive."
+            )
+
+        statement = (
+            select(User)
+            .order_by(
+                User.full_name.asc(),
+                User.id.asc(),
+            )
+            .offset(offset)
+        )
+
+        if limit is not None:
+            statement = statement.limit(limit)
+
+        result = await self.session.scalars(
+            statement
+        )
+
+        return list(
+            result.unique().all()
+        )
+
+
     async def search(
         self,
         query: str,

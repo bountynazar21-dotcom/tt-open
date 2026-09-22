@@ -3622,26 +3622,44 @@ async def query_network_users(
     **_: Any,
 ) -> list[Any]:
     """
-    Всі доступні користувачі мережі.
+    Return network users with one repository query.
+
+    Network-level callers already perform their own access
+    guard. Avoid UserService.get_users() here because it
+    builds an access view separately for every user.
     """
 
-    from app.handlers.bush_admin import (
-        query_users,
-    )
-    from app.handlers.common import (
-        get_database_user,
+    repositories = data.get("repositories")
+
+    repository = (
+        getattr(repositories, "users", None)
+        if repositories is not None
+        else None
     )
 
-    current_user = (
-        actor
-        or user
-        or get_database_user(
-            data
+    if repository is None:
+        return []
+
+    method = getattr(
+        repository,
+        "list_all",
+        None,
+    )
+
+    if not callable(method):
+        return []
+
+    try:
+        result = await method(
+            limit=500,
+            offset=0,
         )
-    )
+        return unwrap_collection(
+            result
+        )
 
-    return await query_users(
-        actor=current_user,
-        data=data,
-        bush_id=0,
-    )
+    except Exception:
+        logger.exception(
+            "UserRepository.list_all failed"
+        )
+        return []

@@ -767,11 +767,7 @@ async def query_network_users(
     data: dict[str, Any],
 ) -> list[Any]:
     """
-    Load network users without building per-user access views.
-
-    Root dashboard/list counters only need User rows. Using
-    UserService.get_users() here causes an N+1 access lookup
-    through get_access_internal() for every user.
+    Return network users with one repository query.
     """
 
     repositories = data.get("repositories")
@@ -787,7 +783,7 @@ async def query_network_users(
 
     method = getattr(
         repository,
-        "search",
+        "list_all",
         None,
     )
 
@@ -796,15 +792,16 @@ async def query_network_users(
 
     try:
         result = await method(
-            "",
-            active_only=False,
             limit=500,
+            offset=0,
         )
-        return unwrap_collection(result)
+        return unwrap_collection(
+            result
+        )
 
     except Exception:
         logger.exception(
-            "UserRepository.search failed"
+            "UserRepository.list_all failed"
         )
         return []
 
