@@ -1246,21 +1246,11 @@ class BindingService:
         result = (
             await self.invoke_binding_repository(
                 method_names=(
-                    "deactivate_store_binding",
-                    "remove_store_binding",
-                    "unbind_user_from_store",
-                    "remove_user_from_store",
-                    "deactivate_binding",
+                    "revoke_store_binding",
                 ),
-                binding_id=self.binding_id(
-                    binding
-                ),
-                user_id=user_id,
-                store_id=store_id,
-                deactivated_by_id=actor.id,
-                removed_by_id=actor.id,
-                deactivated_at=now,
-                removed_at=now,
+                binding=binding,
+                revoked_by_id=actor.id,
+                revoked_at=now,
                 reason=normalized_reason,
             )
         )
@@ -1383,21 +1373,11 @@ class BindingService:
         result = (
             await self.invoke_binding_repository(
                 method_names=(
-                    "deactivate_bush_binding",
-                    "remove_bush_binding",
-                    "unbind_user_from_bush",
-                    "remove_user_from_bush",
-                    "deactivate_binding",
+                    "revoke_bush_role",
                 ),
-                binding_id=self.binding_id(
-                    binding
-                ),
-                user_id=user_id,
-                bush_id=bush_id,
-                deactivated_by_id=actor.id,
-                removed_by_id=actor.id,
-                deactivated_at=now,
-                removed_at=now,
+                binding=binding,
+                revoked_by_id=actor.id,
+                revoked_at=now,
                 reason=normalized_reason,
             )
         )

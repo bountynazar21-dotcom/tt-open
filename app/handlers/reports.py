@@ -3007,6 +3007,9 @@ async def auth_user_action(
 
         "new_role":
             role,
+
+        "reason":
+            "User management action",
     }
 
     for method_name in methods:
