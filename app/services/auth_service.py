@@ -2493,22 +2493,50 @@ class AuthService:
         cls,
         *names: str,
     ) -> AuditAction:
-        """Знаходить AuditAction."""
+        """Resolve AuditAction from supported aliases."""
+
+        aliases = {
+            "create": "created",
+            "created": "created",
+            "update": "updated",
+            "updated": "updated",
+            "change": "updated",
+            "changed": "updated",
+            "edit": "updated",
+            "edited": "updated",
+            "activate": "activated",
+            "activated": "activated",
+            "deactivate": "deactivated",
+            "deactivated": "deactivated",
+            "block": "blocked",
+            "blocked": "blocked",
+            "unblock": "unblocked",
+            "unblocked": "unblocked",
+            "delete": "deleted",
+            "deleted": "deleted",
+            "remove": "deleted",
+            "removed": "deleted",
+        }
+
+        normalized_names = tuple(
+            aliases.get(
+                name.strip().lower(),
+                name.strip().lower(),
+            )
+            for name in names
+            if name.strip()
+        )
 
         result = cls.resolve_enum_member(
             AuditAction,
-            *names,
+            *normalized_names,
             default=None,
         )
 
         if result is not None:
             return result
 
-        return cls.resolve_enum_member(
-            AuditAction,
-            "update",
-            "changed",
-        )
+        return AuditAction.UPDATED
 
     @classmethod
     def resolve_entity_type(
