@@ -2405,10 +2405,7 @@ async def transfer_store_callback(
     try:
         result = await call_binding_operation(
             method_names=(
-                "transfer_store",
                 "transfer_store_binding",
-                "move_store_binding",
-                "reassign_store",
             ),
             payload=payload,
             data=data,
@@ -2598,10 +2595,7 @@ async def transfer_bush_callback(
     try:
         result = await call_binding_operation(
             method_names=(
-                "transfer_bush",
                 "transfer_bush_binding",
-                "move_bush_binding",
-                "reassign_bush",
             ),
             payload=payload,
             data=data,

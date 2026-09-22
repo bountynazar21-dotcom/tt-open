@@ -893,6 +893,171 @@ class BindingService:
     # ПЕРЕНЕСЕННЯ МІЖ ТТ
     # ==========================================
 
+    async def transfer_store_binding(
+        self,
+        *,
+        actor: User,
+        source_user_id: int,
+        destination_user_id: int,
+        store_id: int,
+        reason: str | None = None,
+        transferred_at: datetime | None = None,
+    ) -> BindingChangeResult:
+        """Transfer a store binding between users."""
+
+        if source_user_id == destination_user_id:
+            raise ValueError("Source and destination users must differ.")
+
+        now = transferred_at or datetime.now(UTC)
+        self.validate_aware_datetime(now, field_name="transferred_at")
+
+        normalized_reason = reason or "Store binding transferred between users"
+
+        decision = await self.access.can_manage_store(actor, store_id)
+        decision.raise_if_denied()
+
+        source_user = await self.get_user_or_raise(source_user_id)
+        destination_user = await self.get_user_or_raise(destination_user_id)
+
+        await self.ensure_can_manage_target(
+            actor=actor,
+            target=source_user,
+        )
+        await self.ensure_can_manage_target(
+            actor=actor,
+            target=destination_user,
+        )
+
+        source_binding = await self.get_store_binding(
+            user_id=source_user_id,
+            store_id=store_id,
+            active_only=True,
+            for_update=True,
+        )
+
+        if source_binding is None:
+            raise ValueError("Active source store binding not found.")
+
+        await self.deactivate_store_binding(
+            actor=actor,
+            user_id=source_user_id,
+            store_id=store_id,
+            reason=normalized_reason,
+            deactivated_at=now,
+        )
+
+        assignment = await self.assign_store(
+            actor=actor,
+            user_id=destination_user_id,
+            store_id=store_id,
+            make_primary=True,
+            activate_user=True,
+            change_role=False,
+            reason=normalized_reason,
+            assigned_at=now,
+        )
+
+        await self.log_user_transfer(
+            actor=actor,
+            target=destination_user,
+            description="Store binding transferred between users",
+            reason=normalized_reason,
+            previous_values={
+                "user_id": source_user_id,
+                "store_id": store_id,
+            },
+            current_values={
+                "user_id": destination_user_id,
+                "store_id": store_id,
+            },
+        )
+
+        return assignment
+
+    async def transfer_bush_binding(
+        self,
+        *,
+        actor: User,
+        source_user_id: int,
+        destination_user_id: int,
+        bush_id: int,
+        reason: str | None = None,
+        transferred_at: datetime | None = None,
+    ) -> BindingChangeResult:
+        """Transfer a bush-role binding between users."""
+
+        if source_user_id == destination_user_id:
+            raise ValueError("Source and destination users must differ.")
+
+        now = transferred_at or datetime.now(UTC)
+        self.validate_aware_datetime(now, field_name="transferred_at")
+
+        normalized_reason = reason or "Bush binding transferred between users"
+
+        decision = await self.access.can_manage_bush(actor, bush_id)
+        decision.raise_if_denied()
+
+        source_user = await self.get_user_or_raise(source_user_id)
+        destination_user = await self.get_user_or_raise(destination_user_id)
+
+        await self.ensure_can_manage_target(
+            actor=actor,
+            target=source_user,
+        )
+        await self.ensure_can_manage_target(
+            actor=actor,
+            target=destination_user,
+        )
+
+        source_binding = await self.get_bush_binding(
+            user_id=source_user_id,
+            bush_id=bush_id,
+            active_only=True,
+            for_update=True,
+        )
+
+        if source_binding is None:
+            raise ValueError("Active source bush binding not found.")
+
+        role = source_binding.role
+
+        await self.deactivate_bush_binding(
+            actor=actor,
+            user_id=source_user_id,
+            bush_id=bush_id,
+            reason=normalized_reason,
+            deactivated_at=now,
+        )
+
+        assignment = await self.assign_bush(
+            actor=actor,
+            user_id=destination_user_id,
+            bush_id=bush_id,
+            role=role,
+            activate_user=True,
+            reason=normalized_reason,
+            assigned_at=now,
+        )
+
+        await self.log_user_transfer(
+            actor=actor,
+            target=destination_user,
+            description="Bush binding transferred between users",
+            reason=normalized_reason,
+            previous_values={
+                "user_id": source_user_id,
+                "bush_id": bush_id,
+                "role": role.value,
+            },
+            current_values={
+                "user_id": destination_user_id,
+                "bush_id": bush_id,
+                "role": role.value,
+            },
+        )
+
+        return assignment
+
     async def transfer_store(
         self,
         *,
