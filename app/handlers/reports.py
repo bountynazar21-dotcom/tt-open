@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 import inspect
 import logging
 from html import escape
@@ -1456,21 +1458,27 @@ async def build_root_dashboard(
     Повний network dashboard.
     """
 
+    _perf_start = perf_counter()
+
     stores = await query_all_stores(
         data=data
     )
+    _perf_stores = perf_counter()
 
     bushes = await query_network_bushes(
         data=data
     )
+    _perf_bushes = perf_counter()
 
     clusters = await query_clusters(
         data=data
     )
+    _perf_clusters = perf_counter()
 
     users = await query_network_users(
         data=data
     )
+    _perf_users = perf_counter()
 
     active_stores = [
         store
@@ -1510,12 +1518,17 @@ async def build_root_dashboard(
                 )
             )
 
+    _perf_opening = perf_counter()
+
+    if repositories is not None:
         if closing_repository is not None:
             closing_records = (
                 await closing_repository.get_for_date(
                     business_date=business_date,
                 )
             )
+
+    _perf_closing = perf_counter()
 
     openings_by_store = {
         int(record.store_id): record
@@ -1543,6 +1556,8 @@ async def build_root_dashboard(
             clusters_by_id=clusters_by_id,
         )
     )
+
+    _perf_opening_items = perf_counter()
 
     closing_items = (
         await build_root_store_items(
@@ -1579,6 +1594,8 @@ async def build_root_dashboard(
         if item.state
         == RootStoreState.WAITING_OPENING
     )
+
+    _perf_closing_items = perf_counter()
 
     closed_count = sum(
         1
@@ -1628,11 +1645,15 @@ async def build_root_dashboard(
         in BLOCKED_STATUS_NAMES
     )
 
+    _perf_before_settings = perf_counter()
+
     bot_enabled = await get_setting_bool(
         key="bot_enabled",
         data=data,
         default=True,
     )
+
+    _perf_bot_setting = perf_counter()
 
     maintenance_enabled = (
         await get_setting_bool(
@@ -1640,6 +1661,24 @@ async def build_root_dashboard(
             data=data,
             default=False,
         )
+    )
+
+    _perf_maintenance_setting = perf_counter()
+
+    print(
+        "ROOT DASH PERF | "
+        f"stores={(_perf_stores - _perf_start) * 1000:.1f}ms | "
+        f"bushes={(_perf_bushes - _perf_stores) * 1000:.1f}ms | "
+        f"clusters={(_perf_clusters - _perf_bushes) * 1000:.1f}ms | "
+        f"users={(_perf_users - _perf_clusters) * 1000:.1f}ms | "
+        f"opening_bulk={(_perf_opening - _perf_users) * 1000:.1f}ms | "
+        f"closing_bulk={(_perf_closing - _perf_opening) * 1000:.1f}ms | "
+        f"opening_items={(_perf_opening_items - _perf_closing) * 1000:.1f}ms | "
+        f"closing_items={(_perf_closing_items - _perf_opening_items) * 1000:.1f}ms | "
+        f"counts={(_perf_before_settings - _perf_closing_items) * 1000:.1f}ms | "
+        f"bot_setting={(_perf_bot_setting - _perf_before_settings) * 1000:.1f}ms | "
+        f"maintenance_setting={(_perf_maintenance_setting - _perf_bot_setting) * 1000:.1f}ms | "
+        f"total={(_perf_maintenance_setting - _perf_start) * 1000:.1f}ms"
     )
 
     state = RootAdminDashboardState(
