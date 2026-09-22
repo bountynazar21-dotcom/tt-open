@@ -5,6 +5,7 @@ from datetime import date, time
 from typing import Iterable
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -473,6 +474,34 @@ class ScheduleRepository:
 
         return result.unique().first()
 
+    async def get_network_exception(
+        self,
+        *,
+        exception_date: date,
+        for_update: bool = False,
+    ) -> ScheduleException | None:
+        """Return the network-wide exception for a date."""
+
+        statement = (
+            select(ScheduleException)
+            .where(
+                ScheduleException.store_id.is_(None),
+                ScheduleException.bush_id.is_(None),
+                ScheduleException.exception_date
+                == exception_date,
+            )
+            .limit(1)
+        )
+
+        if for_update:
+            statement = statement.with_for_update()
+
+        result = await self.session.scalars(
+            statement
+        )
+
+        return result.unique().first()
+
     async def get_exception_by_id(
         self,
         exception_id: int,
@@ -546,7 +575,8 @@ class ScheduleRepository:
 
         Виняток повинен стосуватися:
         - або конкретної ТТ;
-        - або цілого куща.
+        - або цілого куща;
+        - або всієї мережі.
         """
 
         self.validate_exception_scope(
@@ -596,9 +626,14 @@ class ScheduleRepository:
                 exception_date=exception_date,
                 for_update=True,
             )
-        else:
+        elif bush_id is not None:
             exception = await self.get_bush_exception(
-                bush_id=int(bush_id),
+                bush_id=bush_id,
+                exception_date=exception_date,
+                for_update=True,
+            )
+        else:
+            exception = await self.get_network_exception(
                 exception_date=exception_date,
                 for_update=True,
             )
@@ -606,7 +641,7 @@ class ScheduleRepository:
         was_created = exception is None
 
         if exception is None:
-            exception = ScheduleException(
+            candidate = ScheduleException(
                 store_id=store_id,
                 bush_id=bush_id,
                 exception_date=exception_date,
@@ -631,36 +666,69 @@ class ScheduleRepository:
                 created_by_id=created_by_id,
             )
 
-            self.session.add(exception)
+            try:
+                async with self.session.begin_nested():
+                    self.session.add(candidate)
+                    await self.session.flush()
 
-        else:
-            exception.exception_type = (
-                exception_type
-            )
+            except IntegrityError:
+                # Another transaction may have created
+                # the same scoped exception after our
+                # initial lookup. Reload the winner and
+                # apply this upsert to that row.
+                if store_id is not None:
+                    exception = (
+                        await self.get_store_exception(
+                            store_id=store_id,
+                            exception_date=exception_date,
+                            for_update=True,
+                        )
+                    )
+                elif bush_id is not None:
+                    exception = (
+                        await self.get_bush_exception(
+                            bush_id=bush_id,
+                            exception_date=exception_date,
+                            for_update=True,
+                        )
+                    )
+                else:
+                    exception = (
+                        await self.get_network_exception(
+                            exception_date=exception_date,
+                            for_update=True,
+                        )
+                    )
 
+                if exception is None:
+                    raise
+
+                was_created = False
+
+            else:
+                exception = candidate
+                was_created = True
+
+        if not was_created:
+            exception.exception_type = exception_type
             exception.opening_time = (
                 normalized_values["opening_time"]
             )
-
             exception.opening_control_deadline = (
                 normalized_values[
                     "opening_control_deadline"
                 ]
             )
-
             exception.closing_time = (
                 normalized_values["closing_time"]
             )
-
             exception.closing_control_deadline = (
                 normalized_values[
                     "closing_control_deadline"
                 ]
             )
-
             exception.reason = normalized_reason
             exception.created_by_id = created_by_id
-
             self.session.add(exception)
 
         await self.session.flush()
@@ -935,8 +1003,9 @@ class ScheduleRepository:
         1. Статус ТТ.
         2. Виняток конкретної ТТ.
         3. Виняток куща.
-        4. Тижневий графік.
-        5. Графік кластера.
+        4. Виняток мережі.
+        5. Тижневий графік.
+        6. Графік кластера.
         """
 
         if (
@@ -993,6 +1062,20 @@ class ScheduleRepository:
                     exception=bush_exception,
                     source="bush_exception",
                 )
+
+        network_exception = (
+            await self.get_network_exception(
+                exception_date=business_date,
+            )
+        )
+
+        if network_exception is not None:
+            return self.schedule_from_exception(
+                store=store,
+                business_date=business_date,
+                exception=network_exception,
+                source="network_exception",
+            )
 
         weekday_schedule = (
             await self.get_weekday_schedule(
@@ -1561,14 +1644,6 @@ class ScheduleRepository:
     ) -> None:
         """Перевіряє ціль винятку графіка."""
 
-        if (
-            store_id is None
-            and bush_id is None
-        ):
-            raise ValueError(
-                "Потрібно вказати торгову точку "
-                "або кущ."
-            )
 
         if (
             store_id is not None

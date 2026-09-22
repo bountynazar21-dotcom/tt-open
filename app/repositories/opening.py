@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import (
     func,
-    or_,
     select,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload
 
@@ -264,8 +264,25 @@ class OpeningRepository(
             control_deadline=normalized_deadline,
         )
 
-        self.session.add(checkin)
-        await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                self.session.add(checkin)
+                await self.session.flush()
+
+        except IntegrityError:
+            # Concurrent first-create: the DB unique
+            # constraint decides the winner. The nested
+            # transaction keeps the outer transaction usable.
+            existing = await self.get_by_store_date(
+                store_id=store_id,
+                business_date=business_date,
+                for_update=True,
+            )
+
+            if existing is None:
+                raise
+
+            return existing, False
 
         return checkin, True
 

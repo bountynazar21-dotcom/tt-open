@@ -266,6 +266,32 @@ class ScheduleException(
             "is_active",
             "exception_date",
         ),
+        Index(
+            "uq_schedule_exceptions_store_date",
+            "store_id",
+            "exception_date",
+            unique=True,
+            postgresql_where=text(
+                "store_id IS NOT NULL AND bush_id IS NULL"
+            ),
+        ),
+        Index(
+            "uq_schedule_exceptions_bush_date",
+            "bush_id",
+            "exception_date",
+            unique=True,
+            postgresql_where=text(
+                "bush_id IS NOT NULL AND store_id IS NULL"
+            ),
+        ),
+        Index(
+            "uq_schedule_exceptions_network_date",
+            "exception_date",
+            unique=True,
+            postgresql_where=text(
+                "store_id IS NULL AND bush_id IS NULL"
+            ),
+        ),
     )
 
     store_id: Mapped[int | None] = mapped_column(

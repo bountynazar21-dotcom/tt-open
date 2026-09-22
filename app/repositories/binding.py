@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -200,8 +201,45 @@ class BindingRepository:
             status=BindingStatus.PENDING,
         )
 
-        self.session.add(binding)
-        await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                self.session.add(binding)
+                await self.session.flush()
+
+        except IntegrityError:
+            # Another transaction may have created
+            # the same user/store binding after our
+            # initial lookup. Keep the outer
+            # transaction alive and load the winner.
+            existing_binding = await self.get_store_binding(
+                user_id=user_id,
+                store_id=store_id,
+                for_update=True,
+            )
+
+            if existing_binding is None:
+                raise
+
+            if (
+                existing_binding.status
+                == BindingStatus.APPROVED
+            ):
+                raise ValueError(
+                    "Користувач уже прив’язаний "
+                    "до цієї торгової точки."
+                )
+
+            if (
+                existing_binding.status
+                == BindingStatus.PENDING
+            ):
+                return existing_binding, False
+
+            existing_binding.reopen_request()
+            self.session.add(existing_binding)
+            await self.session.flush()
+
+            return existing_binding, False
 
         return binding, True
 
@@ -842,6 +880,18 @@ class BindingRepository:
             field_name="assigned_at",
         )
 
+        user_result = await self.session.execute(
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            raise ValueError(
+                "Користувача для призначення ролі не знайдено."
+            )
+
         existing_binding = await self.get_bush_binding(
             user_id=user_id,
             bush_id=bush_id,
@@ -877,18 +927,39 @@ class BindingRepository:
                 assigned_at=assigned_at,
             )
 
-            self.session.add(binding)
-            was_created = True
+            try:
+                async with self.session.begin_nested():
+                    self.session.add(binding)
+                    await self.session.flush()
 
-        user = await self.session.get(
-            User,
-            user_id,
-        )
+            except IntegrityError:
+                existing_binding = await self.get_bush_binding(
+                    user_id=user_id,
+                    bush_id=bush_id,
+                    role=role,
+                    for_update=True,
+                )
 
-        if user is None:
-            raise ValueError(
-                "Користувача для призначення ролі не знайдено."
-            )
+                if existing_binding is None:
+                    raise
+
+                if (
+                    existing_binding.status == BindingStatus.APPROVED
+                ):
+                    raise ValueError(
+                        "Користувач уже має цю роль "
+                        "у вибраному кущі."
+                    )
+
+                existing_binding.restore(
+                    assigned_by_id=assigned_by_id,
+                    assigned_at=assigned_at,
+                )
+                binding = existing_binding
+                was_created = False
+
+            else:
+                was_created = True
 
         if user.role not in {
             UserRole.ROOT_ADMIN,
@@ -941,10 +1012,12 @@ class BindingRepository:
         await self.session.flush()
 
         if synchronize_user_role:
-            user = await self.session.get(
-                User,
-                binding.user_id,
+            user_result = await self.session.execute(
+                select(User)
+                .where(User.id == binding.user_id)
+                .with_for_update()
             )
+            user = user_result.scalar_one_or_none()
 
             if user is not None:
                 await self.sync_management_user_role(

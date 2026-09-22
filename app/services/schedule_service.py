@@ -1076,6 +1076,72 @@ class ScheduleService:
     # ВИДАЛЕННЯ ВИНЯТКУ
     # ==========================================
 
+    async def set_network_exception(
+        self,
+        *,
+        actor: User,
+        exception_date: date,
+        exception_type: ScheduleExceptionType,
+        opening_time: time | None = None,
+        opening_control_deadline: time | None = None,
+        closing_time: time | None = None,
+        closing_control_deadline: time | None = None,
+        reason: str | None = None,
+    ) -> ScheduleExceptionChangeResult:
+        """Create or update a network-wide schedule exception."""
+
+        self.access.require_network_management(actor)
+
+        existing = (
+            await self.repositories.schedules
+            .get_network_exception(
+                exception_date=exception_date,
+                for_update=True,
+            )
+        )
+
+        previous_values = self.exception_snapshot(existing)
+
+        exception, was_created = (
+            await self.repositories.schedules
+            .upsert_exception(
+                exception_date=exception_date,
+                exception_type=exception_type,
+                created_by_id=actor.id,
+                opening_time=opening_time,
+                opening_control_deadline=(
+                    opening_control_deadline
+                ),
+                closing_time=closing_time,
+                closing_control_deadline=(
+                    closing_control_deadline
+                ),
+                reason=reason,
+            )
+        )
+
+        current_values = self.exception_snapshot(exception)
+
+        await self.log_exception_change(
+            actor=actor,
+            exception=exception,
+            previous_values=previous_values,
+            current_values=current_values,
+            was_created=was_created,
+            store=None,
+            bush_id=None,
+            reason=reason,
+        )
+
+        return ScheduleExceptionChangeResult(
+            exception=exception,
+            store=None,
+            bush_id=None,
+            was_created=was_created,
+            previous_values=previous_values,
+            current_values=current_values,
+        )
+
     async def delete_exception(
         self,
         *,
@@ -1111,10 +1177,7 @@ class ScheduleService:
             )
 
         else:
-            raise ValueError(
-                "Виняток не прив’язаний "
-                "ні до ТТ, ні до куща."
-            )
+            self.access.require_network_management(actor)
 
         previous_values = (
             self.exception_snapshot(
@@ -1138,6 +1201,17 @@ class ScheduleService:
             "store",
         )
 
+        if store is not None:
+            delete_target_name = (
+                self.store_display_name(store)
+            )
+        elif exception.bush_id is not None:
+            delete_target_name = (
+                f"bush #{exception.bush_id}"
+            )
+        else:
+            delete_target_name = "network"
+
         await self.repositories.audit.log_action(
             action=action,
             entity_type=entity_type,
@@ -1149,14 +1223,8 @@ class ScheduleService:
                 ),
                 reason=reason,
                 description=(
-                    "Видалено виняток графіка"
-                    + (
-                        f" {self.store_display_name(store)}"
-                        if store is not None
-                        else (
-                            f" куща №{exception.bush_id}"
-                        )
-                    )
+                    "Видалено виняток графіка: "
+                    + delete_target_name
                 ),
                 source="telegram_bot",
             ),
@@ -1523,11 +1591,12 @@ class ScheduleService:
             "store",
         )
 
-        target_name = (
-            self.store_display_name(store)
-            if store is not None
-            else f"кущ №{bush_id}"
-        )
+        if store is not None:
+            target_name = self.store_display_name(store)
+        elif bush_id is not None:
+            target_name = f"bush #{bush_id}"
+        else:
+            target_name = "network"
 
         await self.repositories.audit.log_action(
             action=action,
