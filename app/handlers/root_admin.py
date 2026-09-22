@@ -766,38 +766,13 @@ async def query_network_users(
     *,
     data: dict[str, Any],
 ) -> list[Any]:
-    """Load network users through the exact UserService API."""
+    """
+    Load network users without building per-user access views.
 
-    service = get_service(
-        data,
-        "users",
-        "user",
-    )
-
-    actor = get_database_user(data)
-
-    if service is not None:
-        method = getattr(
-            service,
-            "get_users",
-            None,
-        )
-
-        if callable(method):
-            try:
-                result = await method(
-                    actor=actor,
-                    filter_type=None,
-                    store_id=None,
-                    bush_id=None,
-                    limit=500,
-                    offset=0,
-                )
-                return unwrap_collection(result)
-            except Exception:
-                logger.exception(
-                    "UserService.get_users failed"
-                )
+    Root dashboard/list counters only need User rows. Using
+    UserService.get_users() here causes an N+1 access lookup
+    through get_access_internal() for every user.
+    """
 
     repositories = data.get("repositories")
 
@@ -810,8 +785,6 @@ async def query_network_users(
     if repository is None:
         return []
 
-    # Repository has no canonical list-all method.
-    # search() is its supported collection API.
     method = getattr(
         repository,
         "search",
@@ -828,6 +801,7 @@ async def query_network_users(
             limit=500,
         )
         return unwrap_collection(result)
+
     except Exception:
         logger.exception(
             "UserRepository.search failed"
