@@ -1660,6 +1660,7 @@ class GroupService:
         """
 
         for field_name in (
+            "value_json",
             "value",
             "setting_value",
             "value_text",
@@ -1685,6 +1686,7 @@ class GroupService:
         """
 
         for field_name in (
+            "value_json",
             "value",
             "setting_value",
             "value_text",
