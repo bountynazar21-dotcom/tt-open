@@ -1376,12 +1376,12 @@ class GroupService:
         if scope == TelegramGroupScope.NETWORK:
             return (
                 f"{cls.SETTINGS_PREFIX}"
-                ".network"
+                "_network"
             )
 
         return (
             f"{cls.SETTINGS_PREFIX}"
-            f".bush.{bush_id}"
+            f"_bush_{bush_id}"
         )
 
     @classmethod
@@ -1397,7 +1397,7 @@ class GroupService:
 
         return (
             f"{cls.scope_prefix(scope=scope, bush_id=bush_id)}"
-            ".chat_id"
+            "_chat_id"
         )
 
     @classmethod
@@ -1413,7 +1413,7 @@ class GroupService:
 
         return (
             f"{cls.scope_prefix(scope=scope, bush_id=bush_id)}"
-            ".title"
+            "_title"
         )
 
     @classmethod
@@ -1435,7 +1435,7 @@ class GroupService:
 
         return (
             f"{cls.scope_prefix(scope=scope, bush_id=bush_id)}"
-            f".{topic.value}.thread_id"
+            f"_{topic.value}_thread_id"
         )
 
     # ==========================================
