@@ -1523,29 +1523,18 @@ class GroupService:
         now = datetime.now(UTC)
 
         if setting is None:
-            payload = {
-                "key": normalized_key,
-                "name": normalized_key,
-                "setting_key": (
-                    normalized_key
+            setting = SystemSetting.create(
+                key=normalized_key,
+                display_name=normalized_key,
+                value=normalized_value,
+                value_type="string",
+                category="telegram",
+                description=(
+                    "Telegram group/topic routing setting."
                 ),
-
-                "value": normalized_value,
-                "setting_value": (
-                    normalized_value
-                ),
-                "value_text": (
-                    normalized_value
-                ),
-
-                "created_at": now,
-                "updated_at": now,
-            }
-
-            setting = SystemSetting(
-                **self.filter_setting_payload(
-                    payload
-                )
+                is_editable=True,
+                is_secret=False,
+                requires_restart=False,
             )
 
             self.session.add(
