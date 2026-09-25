@@ -3214,11 +3214,7 @@ async def root_user_approve_callback(
         )
     )
 
-    if requested_role not in {
-        "store_user",
-        "store",
-        "employee",
-    }:
+    if requested_role != "STORE_USER":
         await execute_user_action(
             callback,
             action="approve",
