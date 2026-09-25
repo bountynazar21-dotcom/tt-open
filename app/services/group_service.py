@@ -1784,8 +1784,7 @@ class GroupService:
 
         action = (
             self.resolve_audit_action(
-                "update",
-                "changed",
+                "updated",
             )
         )
 
@@ -1850,7 +1849,7 @@ class GroupService:
 
         result = cls.resolve_enum_member(
             AuditAction,
-            "update",
+            "updated",
             default=None,
         )
 
