@@ -808,6 +808,35 @@ class GroupService:
         )
 
     # ==========================================
+    # GET GROUP BY CHAT ID
+    # ==========================================
+
+    async def get_group_by_chat_id(
+        self,
+        chat_id: int,
+    ) -> GroupBindingView | None:
+        """
+        ???????? ????????????? Telegram-?????
+        ?? ?? chat_id.
+
+        Network group ???????????? ?
+        SystemSetting, ???? lookup ?????????
+        ????? canonical get_network_group().
+        """
+
+        network_group = (
+            await self.get_network_group()
+        )
+
+        if (
+            network_group is not None
+            and network_group.chat_id == chat_id
+        ):
+            return network_group
+
+        return None
+
+    # ==========================================
     # GET BUSH GROUP
     # ==========================================
 
