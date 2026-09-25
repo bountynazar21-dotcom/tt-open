@@ -1640,7 +1640,7 @@ async def register_network_group_command(
             data=data,
         )
 
-    except Exception:
+    except Exception as error:
         logger.exception(
             "Network group registration failed: "
             "%s",
@@ -1648,8 +1648,11 @@ async def register_network_group_command(
         )
 
         await message.answer(
-            "❌ Не вдалося зареєструвати "
-            "головну групу."
+            "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0437\u0430\u0440\u0435\u0454\u0441\u0442\u0440\u0443\u0432\u0430\u0442\u0438 "
+            "\u0433\u043e\u043b\u043e\u0432\u043d\u0443 \u0433\u0440\u0443\u043f\u0443.\n\n"
+            "\U0001f50e <b>DEBUG</b>\n"
+            f"<code>{escape(type(error).__name__)}</code>\n"
+            f"<code>{escape(str(error))}</code>"
         )
 
         return
