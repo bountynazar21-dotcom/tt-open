@@ -1819,29 +1819,26 @@ class AuthService:
         store_id: int,
         assigned_at: datetime,
     ) -> bool:
-        """Створює активну прив’язку до ТТ."""
+        """Створює та підтверджує прив’язку до ТТ."""
 
-        result = await self.invoke_binding_method(
-            method_names=(
-                "bind_user_to_store",
-                "create_store_binding",
-                "upsert_store_binding",
-                "assign_store",
-                "add_user_to_store",
-            ),
-            user_id=user.id,
-            store_id=store_id,
-            created_by_id=actor.id,
-            assigned_by_id=actor.id,
-            created_at=assigned_at,
-            assigned_at=assigned_at,
-            is_active=True,
+        repository = self.repositories.bindings
+
+        binding, created = (
+            await repository.create_store_request(
+                user_id=user.id,
+                store_id=store_id,
+                requested_at=assigned_at,
+            )
         )
 
-        return self.result_to_bool(
-            result,
-            default=True,
+        await repository.approve_store_binding(
+            binding,
+            approved_by_id=actor.id,
+            approved_at=assigned_at,
+            activate_user=False,
         )
+
+        return created
 
     async def create_bush_binding(
         self,
