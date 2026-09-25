@@ -637,8 +637,8 @@ def store_invite_create_keyboard(
             [
                 inline_button(
                     text="✅ Створити посилання",
-                    callback=InviteCallback(
-                        action=InviteAction.CREATE,
+                    callback=InviteUICallback(
+                        action=InviteUIAction.CREATE,
                         target_id=store_id,
                         invite_id=0,
                     ),
@@ -691,8 +691,8 @@ def bush_invite_create_keyboard(
             [
                 inline_button(
                     text="✅ Створити посилання",
-                    callback=InviteCallback(
-                        action=InviteAction.CREATE,
+                    callback=InviteUICallback(
+                        action=InviteUIAction.CREATE,
                         target_id=bush_id,
                         invite_id=0,
                     ),
@@ -739,8 +739,8 @@ def director_invite_create_keyboard(
             [
                 inline_button(
                     text="✅ Створити посилання",
-                    callback=InviteCallback(
-                        action=InviteAction.CREATE,
+                    callback=InviteUICallback(
+                        action=InviteUIAction.CREATE,
                         target_id=0,
                         invite_id=0,
                     ),
