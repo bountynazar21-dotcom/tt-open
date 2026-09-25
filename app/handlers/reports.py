@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
+    InlineKeyboardMarkup,
     Message,
 )
 
@@ -90,6 +91,9 @@ from app.keyboards import (
     SettingsCallback,
     UserAction,
     UserCallback,
+    StoreSelectAction,
+    StoreSelectCallback,
+    inline_button,
 )
 
 from app.keyboards.root_admin import (
@@ -2973,6 +2977,7 @@ async def auth_user_action(
     actor: DatabaseUser,
     data: dict[str, Any],
     role: Any = None,
+    store_id: int | None = None,
 ) -> bool:
     """
     Викликає AuthService.
@@ -3049,6 +3054,9 @@ async def auth_user_action(
         "new_role":
             role,
 
+        "store_id":
+            store_id,
+
         "reason":
             "User management action",
     }
@@ -3112,6 +3120,7 @@ async def execute_user_action(
     action: str,
     target_user_id: int,
     data: dict[str, Any],
+    store_id: int | None = None,
 ) -> None:
     """
     Common user mutation.
@@ -3132,6 +3141,7 @@ async def execute_user_action(
         ),
         actor=actor,
         data=data,
+        store_id=store_id,
     )
 
     if not success:
@@ -3158,6 +3168,7 @@ async def execute_user_action(
         )
 
 
+
 @router.callback_query(
     UserCallback.filter(
         F.action
@@ -3169,14 +3180,125 @@ async def root_user_approve_callback(
     callback_data: UserCallback,
     **data: Any,
 ) -> None:
-    await execute_user_action(
-        callback,
-        action="approve",
-        target_user_id=(
-            callback_data.user_id
-        ),
+    """
+    Approve user.
+
+    STORE_USER requires explicit store selection.
+    Other roles continue through the existing flow.
+    """
+
+    target_user_id = (
+        callback_data.user_id
+    )
+
+    target = await load_user(
+        user_id=target_user_id,
         data=data,
     )
+
+    if target is None:
+        await callback.answer(
+            "\u041a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 "
+            "\u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
+            show_alert=True,
+        )
+        return
+
+    requested_role = normalized_role(
+        first_attr(
+            target,
+            "requested_role",
+            "pending_role",
+            "role",
+            default="store_user",
+        )
+    )
+
+    if requested_role not in {
+        "store_user",
+        "store",
+        "employee",
+    }:
+        await execute_user_action(
+            callback,
+            action="approve",
+            target_user_id=target_user_id,
+            data=data,
+        )
+        return
+
+    stores = [
+        store
+        for store in (
+            await query_all_stores(
+                data=data
+            )
+        )
+        if is_store_active(
+            store
+        )
+    ]
+
+    rows = []
+
+    for store in stores:
+        store_id = object_id(
+            store
+        )
+
+        if store_id <= 0:
+            continue
+
+        label = store_title(
+            store
+        )
+
+        rows.append(
+            [
+                inline_button(
+                    text=label[:60],
+                    callback=(
+                        StoreSelectCallback(
+                            action=(
+                                StoreSelectAction.SELECT
+                            ),
+                            context=(
+                                f"appr_{target_user_id}"
+                            ),
+                            store_id=store_id,
+                            page=0,
+                        )
+                    ),
+                )
+            ]
+        )
+
+    if not rows:
+        await callback.answer(
+            "\u041d\u0435\u043c\u0430\u0454 "
+            "\u0430\u043a\u0442\u0438\u0432\u043d\u0438\u0445 "
+            "\u0422\u0422.",
+            show_alert=True,
+        )
+        return
+
+    await safe_edit(
+        callback,
+        text=(
+            "\u2705 <b>\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043d\u043d\u044f "
+            "\u043f\u0440\u0430\u0446\u0456\u0432\u043d\u0438\u043a\u0430</b>"
+            "\n\n"
+            "\u041e\u0431\u0435\u0440\u0456\u0442\u044c "
+            "\u0422\u0422 \u0434\u043b\u044f "
+            "\u043a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430."
+        ),
+        reply_markup=(
+            InlineKeyboardMarkup(
+                inline_keyboard=rows
+            )
+        ),
+    )
+
 
 
 @router.callback_query(
@@ -4954,3 +5076,67 @@ __all__ = [
     "show_opening_list",
     "show_closing_list",
 ]
+
+
+# APPROVE_STORE_SCOPE_V1
+
+
+def approval_user_id_from_context(
+    context: str,
+) -> int:
+    prefix = "appr_"
+
+    if not context.startswith(
+        prefix
+    ):
+        return 0
+
+    value = context[
+        len(prefix):
+    ]
+
+    if not value.isdigit():
+        return 0
+
+    return int(value)
+
+
+@router.callback_query(
+    StoreSelectCallback.filter(
+        (F.action == StoreSelectAction.SELECT)
+        & F.context.startswith("appr_")
+    )
+)
+async def approval_store_select_callback(
+    callback: CallbackQuery,
+    callback_data: StoreSelectCallback,
+    **data: Any,
+) -> None:
+    """
+    Complete STORE_USER approval after TT selection.
+    """
+
+    target_user_id = (
+        approval_user_id_from_context(
+            callback_data.context
+        )
+    )
+
+    if target_user_id <= 0:
+        return
+
+    if callback_data.store_id <= 0:
+        await callback.answer(
+            "\u041d\u0435\u043a\u043e\u0440\u0435\u043a\u0442\u043d\u0430 "
+            "\u0422\u0422.",
+            show_alert=True,
+        )
+        return
+
+    await execute_user_action(
+        callback,
+        action="approve",
+        target_user_id=target_user_id,
+        store_id=callback_data.store_id,
+        data=data,
+    )
