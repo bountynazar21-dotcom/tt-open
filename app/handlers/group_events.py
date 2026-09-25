@@ -850,6 +850,13 @@ async def register_group(
 
         "active":
             True,
+
+        # audit
+        "reason":
+            (
+                "?????????? Telegram-????? "
+                "????? ??????? ? Telegram"
+            ),
     }
 
     if scope == "network":
