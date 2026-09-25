@@ -3246,7 +3246,8 @@ async def root_user_approve_callback(
             continue
 
         label = store_title(
-            store
+            store,
+            store_id=store_id,
         )
 
         rows.append(
