@@ -1624,7 +1624,9 @@ class GroupService:
 
         if for_update:
             statement = (
-                statement.with_for_update()
+                statement.with_for_update(
+                    of=SystemSetting
+                )
             )
 
         return await self.session.scalar(
