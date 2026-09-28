@@ -1192,6 +1192,27 @@ async def create_invite(
         invite_type
     )
 
+    actor_role = getattr(
+        actor,
+        "role",
+        None,
+    )
+
+    actor_role_name = (
+        getattr(actor_role, "name", None)
+        or getattr(actor_role, "value", None)
+        or str(actor_role or "")
+    )
+
+    if (
+        invite_type == "bush"
+        and str(actor_role_name).upper()
+        == "DIRECTOR"
+    ):
+        role = "BUSH_ADMIN"
+        single_use = True
+
+
     delta = expiration_delta(
         expiration
     )
@@ -2390,6 +2411,24 @@ async def select_bush_callback(
         data
     )
 
+    user_role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    user_role_name = (
+        getattr(user_role, "name", None)
+        or getattr(user_role, "value", None)
+        or str(user_role or "")
+    )
+
+    is_director = (
+        str(user_role_name).upper()
+        == "DIRECTOR"
+    )
+
+
     if not can_manage_invites(
         user
     ):
@@ -2449,11 +2488,25 @@ async def select_bush_callback(
         await safe_edit(
             callback,
             text=(
-                "🌿 <b>Invite для куща</b>\n\n"
+                "\U0001f33f <b>Invite \u0434\u043b\u044f "
+                "\u043a\u0443\u0449\u0430</b>\n\n"
                 f"{escape(str(name))}\n\n"
-                "Це запрошення створить "
-                "доступ рівня Лева.\n\n"
-                "Налаштуйте invite:"
+                + (
+                    "\u0426\u0435 \u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044f "
+                    "\u0441\u0442\u0432\u043e\u0440\u0438\u0442\u044c "
+                    "\u0434\u043e\u0441\u0442\u0443\u043f "
+                    "\u0440\u0456\u0432\u043d\u044f "
+                    "\u0410\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430 "
+                    "\u043a\u0443\u0449\u0430.\n\n"
+                    if is_director
+                    else
+                    "\u0426\u0435 \u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044f "
+                    "\u0441\u0442\u0432\u043e\u0440\u0438\u0442\u044c "
+                    "\u0434\u043e\u0441\u0442\u0443\u043f "
+                    "\u0440\u0456\u0432\u043d\u044f "
+                    "\u041b\u0435\u0432\u0430.\n\n"
+                )
+                + "\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0439\u0442\u0435 invite:"
             ),
             reply_markup=(
                 build_keyboard(
@@ -2929,6 +2982,24 @@ async def invite_create_callback(
         data
     )
 
+    user_role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    user_role_name = (
+        getattr(user_role, "name", None)
+        or getattr(user_role, "value", None)
+        or str(user_role or "")
+    )
+
+    is_director = (
+        str(user_role_name).upper()
+        == "DIRECTOR"
+    )
+
+
     if not can_manage_invites(
         user
     ):
@@ -2979,6 +3050,24 @@ async def invite_create_callback(
             True,
         )
     )
+
+
+    if is_director:
+        if invite_type != "bush":
+            await callback.answer(
+                "\u26d4 \u0414\u0438\u0440\u0435\u043a\u0442\u043e\u0440 "
+                "\u043c\u043e\u0436\u0435 "
+                "\u0441\u0442\u0432\u043e\u0440\u044e\u0432\u0430\u0442\u0438 "
+                "\u043b\u0438\u0448\u0435 "
+                "\u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044f "
+                "\u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430 "
+                "\u043a\u0443\u0449\u0430.",
+                show_alert=True,
+            )
+
+            return
+
+        single_use = True
 
     # Director invite only ROOT.
     if (
