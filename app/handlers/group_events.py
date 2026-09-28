@@ -1806,6 +1806,119 @@ async def register_bush_group_command(
 # =========================================================
 
 
+@router.message(
+    Command(
+        "bush_topic"
+    ),
+    F.chat.type.in_(
+        {
+            "group",
+            "supergroup",
+        }
+    ),
+)
+async def register_bush_topic_command(
+    message: Message,
+    **data: Any,
+) -> None:
+    """
+    ????????? ???????? Forum Topic
+    ?? ??????????? ????.
+
+    ???????:
+        /bush_topic 1
+    """
+
+    user = get_database_user(
+        data
+    )
+
+    argument = command_argument(
+        message
+    )
+
+    bush_id = to_int(
+        argument
+    )
+
+    if bush_id <= 0:
+        await message.answer(
+            "?? ??????? ID ????.\n\n"
+            "?????????:\n"
+            "<code>/bush_topic 1</code>"
+        )
+        return
+
+    if not can_register_bush_group(
+        user=user,
+        bush_id=bush_id,
+        data=data,
+    ):
+        await message.answer(
+            "? ? ??? ????? ??????? "
+            "?? ????? ????."
+        )
+        return
+
+    if not bool(
+        message.chat.is_forum
+    ):
+        await message.answer(
+            "?? ?? ??????? ?????? "
+            "???? ? Forum-?????."
+        )
+        return
+
+    thread_id = to_int(
+        message.message_thread_id
+    )
+
+    if thread_id <= 0:
+        await message.answer(
+            "?? ????????? ??????? "
+            "????????????? ????????? "
+            "?????????? Topic."
+        )
+        return
+
+    repositories = data.get(
+        "repositories"
+    )
+
+    if repositories is None:
+        raise RuntimeError(
+            "Repositories ??????????."
+        )
+
+    bush = await repositories.bushes.get_active_by_id(
+        bush_id
+    )
+
+    if bush is None:
+        await message.answer(
+            "? ???????? ??? ? ????? ID "
+            "?? ????????."
+        )
+        return
+
+    await repositories.bushes.set_telegram_topic(
+        bush,
+        topic_id=thread_id,
+    )
+
+    await flush_changes(
+        data
+    )
+
+    await message.answer(
+        "? <b>Topic ???? ??????????.</b>\n\n"
+        f"?? {escape(str(bush.name))}\n"
+        f"?? Bush ID: <code>{bush.id}</code>\n"
+        f"?? Chat ID: <code>{message.chat.id}</code>\n"
+        f"?? Thread ID: <code>{thread_id}</code>"
+    )
+
+
 async def register_current_topic(
     message: Message,
     *,
