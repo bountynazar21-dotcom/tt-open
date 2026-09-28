@@ -1492,38 +1492,80 @@ class ExcelService:
     # НОРМАЛІЗАЦІЯ EXCEL-ЗНАЧЕНЬ
     # ==========================================
 
-    @classmethod
+    @staticmethod
     def normalize_excel_value(
-        cls,
         value: Any,
     ) -> Any:
         """
-        Перетворює значення у формат openpyxl.
+        Normalizes a value for openpyxl.
+
+        Excel does not support timezone-aware
+        datetime/time objects.
         """
+
+        from datetime import (
+            date,
+            datetime,
+            time,
+        )
+        from decimal import Decimal
+        from enum import Enum
 
         if value is None:
             return None
 
-        if isinstance(value, Enum):
-            return str(value.value)
+        if isinstance(
+            value,
+            datetime,
+        ):
+            if value.tzinfo is not None:
+                value = value.replace(
+                    tzinfo=None
+                )
 
-        if isinstance(value, Decimal):
-            return float(value)
-
-        if isinstance(value, Path):
-            return str(value)
+            return value
 
         if isinstance(
             value,
-            (dict, list, tuple, set),
+            time,
         ):
-            return json.dumps(
-                value,
-                ensure_ascii=False,
-                default=str,
-            )
+            if value.tzinfo is not None:
+                value = value.replace(
+                    tzinfo=None
+                )
 
-        return value
+            return value
+
+        if isinstance(
+            value,
+            date,
+        ):
+            return value
+
+        if isinstance(
+            value,
+            Decimal,
+        ):
+            return float(value)
+
+        if isinstance(
+            value,
+            Enum,
+        ):
+            return value.value
+
+        if isinstance(
+            value,
+            (
+                str,
+                int,
+                float,
+                bool,
+            ),
+        ):
+            return value
+
+        return str(value)
 
     # ==========================================
     # ФОРМАТУВАННЯ
