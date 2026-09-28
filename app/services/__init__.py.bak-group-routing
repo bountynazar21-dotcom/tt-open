@@ -502,7 +502,6 @@ class Services:
         return ClosingService(
             self.repositories,
             access_service=self.access,
-            group_service=self.groups,
         )
 
     # =====================================================

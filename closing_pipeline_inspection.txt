@@ -1,0 +1,1409 @@
+====================================================================================================
+app\services\closing_service.py [500-850]
+====================================================================================================
+  500:         business_date = (
+  501:             current_time
+  502:             .astimezone(
+  503:                 self.get_timezone(
+  504:                     resolved_timezone
+  505:                 )
+  506:             )
+  507:             .date()
+  508:         )
+  509: 
+  510:         return (
+  511:             await self.repositories.closings
+  512:             .remove_pending_receipt(
+  513:                 store_id=store.id,
+  514:                 business_date=business_date,
+  515:             )
+  516:         )
+  517: 
+  518:     # ==========================================
+  519:     # ПОДАННЯ ВЕЧІРНЬОГО ЗВІТУ
+  520:     # ==========================================
+  521: 
+  522:     async def submit_report(
+  523:         self,
+  524:         *,
+  525:         user: User,
+  526:         store_id: int,
+  527:         current_time: datetime,
+  528:         cash_amount: Decimal | int | float | str,
+  529:         timezone_name: str | None = None,
+  530:         receipt_file_id: str | None = None,
+  531:         receipt_file_unique_id: str | None = None,
+  532:         receipt_mime_type: str | None = None,
+  533:         receipt_file_name: str | None = None,
+  534:         receipt_file_size: int | None = None,
+  535:         source: str = "telegram_bot",
+  536:         telegram_chat_id: int | None = None,
+  537:         telegram_message_id: int | None = None,
+  538:         queue_group_message: bool = True,
+  539:         update_summaries: bool = True,
+  540:     ) -> ClosingSubmissionResult:
+  541:         """
+  542:         Підтверджує вечірній звіт працівника.
+  543: 
+  544:         Час подання береться із сервера.
+  545:         """
+  546: 
+  547:         self.validate_aware_datetime(
+  548:             current_time,
+  549:             field_name="current_time",
+  550:         )
+  551: 
+  552:         normalized_cash = (
+  553:             self.normalize_cash_amount(
+  554:                 cash_amount
+  555:             )
+  556:         )
+  557: 
+  558:         store = (
+  559:             await self.access
+  560:             .require_store_operation(
+  561:                 user,
+  562:                 store_id,
+  563:             )
+  564:         )
+  565: 
+  566:         resolved_timezone = (
+  567:             timezone_name
+  568:             or await self.get_timezone_name()
+  569:         )
+  570: 
+  571:         timezone = self.get_timezone(
+  572:             resolved_timezone
+  573:         )
+  574: 
+  575:         business_date = (
+  576:             current_time
+  577:             .astimezone(timezone)
+  578:             .date()
+  579:         )
+  580: 
+  581:         _, schedule, _ = (
+  582:             await self.prepare_store_report(
+  583:                 store=store,
+  584:                 business_date=business_date,
+  585:             )
+  586:         )
+  587: 
+  588:         require_receipt = (
+  589:             await self.repositories.settings
+  590:             .get_bool(
+  591:                 self.repositories.settings
+  592:                 .CLOSING_REQUIRE_RECEIPT,
+  593:                 default=True,
+  594:             )
+  595:         )
+  596: 
+  597:         report, was_confirmed_now = (
+  598:             await self.repositories.closings
+  599:             .confirm_report(
+  600:                 store_id=store.id,
+  601:                 business_date=business_date,
+  602:                 submitted_at=current_time,
+  603:                 submitted_by_id=user.id,
+  604:                 cash_amount=normalized_cash,
+  605:                 scheduled_close_time=(
+  606:                     schedule.closing_time
+  607:                 ),
+  608:                 control_deadline=(
+  609:                     schedule
+  610:                     .closing_control_deadline
+  611:                 ),
+  612:                 timezone_name=resolved_timezone,
+  613:                 require_receipt=require_receipt,
+  614:                 source=source,
+  615:                 telegram_chat_id=(
+  616:                     telegram_chat_id
+  617:                 ),
+  618:                 telegram_message_id=(
+  619:                     telegram_message_id
+  620:                 ),
+  621:                 receipt_file_id=receipt_file_id,
+  622:                 receipt_file_unique_id=(
+  623:                     receipt_file_unique_id
+  624:                 ),
+  625:                 receipt_mime_type=(
+  626:                     receipt_mime_type
+  627:                 ),
+  628:                 receipt_file_name=(
+  629:                     receipt_file_name
+  630:                 ),
+  631:                 receipt_file_size=(
+  632:                     receipt_file_size
+  633:                 ),
+  634:             )
+  635:         )
+  636: 
+  637:         if was_confirmed_now:
+  638:             await self.log_report_submission(
+  639:                 user=user,
+  640:                 store=store,
+  641:                 report=report,
+  642:                 schedule=schedule,
+  643:                 source=source,
+  644:                 telegram_chat_id=(
+  645:                     telegram_chat_id
+  646:                 ),
+  647:                 telegram_message_id=(
+  648:                     telegram_message_id
+  649:                 ),
+  650:             )
+  651: 
+  652:         group_notification: (
+  653:             NotificationLog | None
+  654:         ) = None
+  655: 
+  656:         group_notification_created = False
+  657: 
+  658:         if (
+  659:             was_confirmed_now
+  660:             and queue_group_message
+  661:         ):
+  662:             (
+  663:                 group_notification,
+  664:                 group_notification_created,
+  665:             ) = await self.queue_report_to_group(
+  666:                 store=store,
+  667:                 report=report,
+  668:                 queued_at=current_time,
+  669:                 timezone_name=resolved_timezone,
+  670:             )
+  671: 
+  672:         summary_updates: list[
+  673:             SummaryUpdateDecision
+  674:         ] = []
+  675: 
+  676:         if (
+  677:             was_confirmed_now
+  678:             and update_summaries
+  679:         ):
+  680:             summary_updates = (
+  681:                 await self.prepare_summary_updates(
+  682:                     business_date=business_date,
+  683:                     changed_store=store,
+  684:                     timezone_name=resolved_timezone,
+  685:                 )
+  686:             )
+  687: 
+  688:         return ClosingSubmissionResult(
+  689:             store=store,
+  690:             schedule=schedule,
+  691:             report=report,
+  692:             was_confirmed_now=(
+  693:                 was_confirmed_now
+  694:             ),
+  695:             cash_amount=Decimal(
+  696:                 str(report.cash_amount)
+  697:             ).quantize(
+  698:                 Decimal("0.01")
+  699:             ),
+  700:             is_late=self.is_late_report(
+  701:                 report
+  702:             ),
+  703:             group_notification=(
+  704:                 group_notification
+  705:             ),
+  706:             group_notification_created=(
+  707:                 group_notification_created
+  708:             ),
+  709:             summary_updates=tuple(
+  710:                 summary_updates
+  711:             ),
+  712:         )
+  713: 
+  714:     # ==========================================
+  715:     # НАДСИЛАННЯ ЗВІТУ В ГРУПУ
+  716:     # ==========================================
+  717: 
+  718:     async def queue_report_to_group(
+  719:         self,
+  720:         *,
+  721:         store: Store,
+  722:         report: ClosingReport,
+  723:         queued_at: datetime,
+  724:         timezone_name: str,
+  725:     ) -> tuple[
+  726:         NotificationLog | None,
+  727:         bool,
+  728:     ]:
+  729:         """
+  730:         Ставить підтверджений звіт у чергу
+  731:         для Telegram-групи закриттів.
+  732:         """
+  733: 
+  734:         group_id = (
+  735:             await self.repositories.settings
+  736:             .get_closing_group_id()
+  737:         )
+  738: 
+  739:         if group_id is None:
+  740:             return None, False
+  741: 
+  742:         notification_type = (
+  743:             self.resolve_notification_type(
+  744:                 "closing_report",
+  745:                 "closing_submitted",
+  746:                 "closing_report_submitted",
+  747:                 "store_closed",
+  748:             )
+  749:         )
+  750: 
+  751:         message_text = (
+  752:             self.build_group_report_text(
+  753:                 store=store,
+  754:                 report=report,
+  755:                 timezone_name=timezone_name,
+  756:             )
+  757:         )
+  758: 
+  759:         topic_id = self.get_bush_closing_topic_id(
+  760:             await self.get_store_bush(store)
+  761:         )
+  762: 
+  763:         receipt_file_id = getattr(
+  764:             report,
+  765:             "receipt_file_id",
+  766:             None,
+  767:         )
+  768: 
+  769:         notification, was_created = (
+  770:             await self.repositories.notifications
+  771:             .get_or_create_from_parts(
+  772:                 notification_type=(
+  773:                     notification_type
+  774:                 ),
+  775:                 business_date=(
+  776:                     report.business_date
+  777:                 ),
+  778:                 store_id=store.id,
+  779:                 bush_id=store.bush_id,
+  780:                 chat_id=group_id,
+  781:                 topic_id=topic_id,
+  782:                 suffix="closing-report-group",
+  783:                 scheduled_for=queued_at,
+  784:                 message_text=message_text,
+  785:                 payload_json={
+  786:                     "send_method": (
+  787:                         "photo"
+  788:                         if receipt_file_id
+  789:                         else "message"
+  790:                     ),
+  791:                     "report_id": report.id,
+  792:                     "store_id": store.id,
+  793:                     "store_code": (
+  794:                         self.store_display_name(
+  795:                             store
+  796:                         )
+  797:                     ),
+  798:                     "business_date": (
+  799:                         report.business_date
+  800:                         .isoformat()
+  801:                     ),
+  802:                     "cash_amount": str(
+  803:                         report.cash_amount
+  804:                     ),
+  805:                     "receipt_file_id": (
+  806:                         receipt_file_id
+  807:                     ),
+  808:                     "caption": message_text,
+  809:                     "parse_mode": "HTML",
+  810:                 },
+  811:             )
+  812:         )
+  813: 
+  814:         return notification, was_created
+  815: 
+  816:     async def mark_group_delivery(
+  817:         self,
+  818:         *,
+  819:         report_id: int,
+  820:         chat_id: int,
+  821:         message_id: int,
+  822:         sent_at: datetime,
+  823:         topic_id: int | None = None,
+  824:     ) -> ClosingReport:
+  825:         """
+  826:         Фіксує успішне надсилання звіту
+  827:         в Telegram-групу.
+  828:         """
+  829: 
+  830:         self.validate_aware_datetime(
+  831:             sent_at,
+  832:             field_name="sent_at",
+  833:         )
+  834: 
+  835:         report = (
+  836:             await self.repositories.closings
+  837:             .get_report_for_update_or_raise(
+  838:                 report_id
+  839:             )
+  840:         )
+  841: 
+  842:         return (
+  843:             await self.repositories.closings
+  844:             .mark_sent_to_group(
+  845:                 report,
+  846:                 chat_id=chat_id,
+  847:                 message_id=message_id,
+  848:                 sent_at=sent_at,
+  849:                 topic_id=topic_id,
+  850:             )
+
+====================================================================================================
+app\services\closing_service.py [1320-1660]
+====================================================================================================
+ 1320:                 notifications.extend(queued)
+ 1321: 
+ 1322:                 created_notifications += (
+ 1323:                     created_count
+ 1324:                 )
+ 1325: 
+ 1326:                 existing_notifications += (
+ 1327:                     len(queued)
+ 1328:                     - created_count
+ 1329:                 )
+ 1330: 
+ 1331:         for report in missed_reports:
+ 1332:             store = (
+ 1333:                 await self.access
+ 1334:                 .get_store_or_raise(
+ 1335:                     report.store_id
+ 1336:                 )
+ 1337:             )
+ 1338: 
+ 1339:             await self.log_missed_deadline(
+ 1340:                 store=store,
+ 1341:                 report=report,
+ 1342:             )
+ 1343: 
+ 1344:         summary_updates: list[
+ 1345:             SummaryUpdateDecision
+ 1346:         ] = []
+ 1347: 
+ 1348:         if (
+ 1349:             missed_reports
+ 1350:             and update_summaries
+ 1351:         ):
+ 1352:             stores = await self.load_stores(
+ 1353:                 {
+ 1354:                     report.store_id
+ 1355:                     for report in missed_reports
+ 1356:                 }
+ 1357:             )
+ 1358: 
+ 1359:             bush_ids = {
+ 1360:                 store.bush_id
+ 1361:                 for store in stores
+ 1362:                 if store.bush_id is not None
+ 1363:             }
+ 1364: 
+ 1365:             summary_updates = (
+ 1366:                 await self.prepare_summary_updates(
+ 1367:                     business_date=business_date,
+ 1368:                     bush_ids=bush_ids,
+ 1369:                     timezone_name=resolved_timezone,
+ 1370:                 )
+ 1371:             )
+ 1372: 
+ 1373:         return ClosingDeadlineResult(
+ 1374:             business_date=business_date,
+ 1375:             missed_reports=tuple(
+ 1376:                 missed_reports
+ 1377:             ),
+ 1378:             notifications=tuple(
+ 1379:                 notifications
+ 1380:             ),
+ 1381:             created_notifications=(
+ 1382:                 created_notifications
+ 1383:             ),
+ 1384:             existing_notifications=(
+ 1385:                 existing_notifications
+ 1386:             ),
+ 1387:             summary_updates=tuple(
+ 1388:                 summary_updates
+ 1389:             ),
+ 1390:         )
+ 1391: 
+ 1392:     # ==========================================
+ 1393:     # СПОВІЩЕННЯ ПРО НЕПОДАНИЙ ЗВІТ
+ 1394:     # ==========================================
+ 1395: 
+ 1396:     async def queue_missed_notifications(
+ 1397:         self,
+ 1398:         *,
+ 1399:         store: Store,
+ 1400:         report: ClosingReport,
+ 1401:         queued_at: datetime,
+ 1402:     ) -> tuple[list[NotificationLog], int]:
+ 1403:         """
+ 1404:         Створює повідомлення для:
+ 1405: 
+ 1406:         - працівників ТТ;
+ 1407:         - адміністратора куща;
+ 1408:         - левів;
+ 1409:         - директорів;
+ 1410:         - ROOT_ADMIN.
+ 1411:         """
+ 1412: 
+ 1413:         recipients = await self.get_alert_recipients(
+ 1414:             store
+ 1415:         )
+ 1416: 
+ 1417:         if not recipients:
+ 1418:             return [], 0
+ 1419: 
+ 1420:         notification_type = (
+ 1421:             self.resolve_notification_type(
+ 1422:                 "closing_missed",
+ 1423:                 "closing_deadline_missed",
+ 1424:                 "closing_alert",
+ 1425:                 "report_not_submitted",
+ 1426:             )
+ 1427:         )
+ 1428: 
+ 1429:         message_text = (
+ 1430:             self.build_missed_notification_text(
+ 1431:                 store=store,
+ 1432:                 report=report,
+ 1433:             )
+ 1434:         )
+ 1435: 
+ 1436:         notifications: list[
+ 1437:             NotificationLog
+ 1438:         ] = []
+ 1439: 
+ 1440:         created_count = 0
+ 1441: 
+ 1442:         for recipient in recipients:
+ 1443:             if recipient.telegram_id is None:
+ 1444:                 continue
+ 1445: 
+ 1446:             notification, was_created = (
+ 1447:                 await self.repositories.notifications
+ 1448:                 .get_or_create_from_parts(
+ 1449:                     notification_type=(
+ 1450:                         notification_type
+ 1451:                     ),
+ 1452:                     business_date=(
+ 1453:                         report.business_date
+ 1454:                     ),
+ 1455:                     recipient_user_id=(
+ 1456:                         recipient.id
+ 1457:                     ),
+ 1458:                     store_id=store.id,
+ 1459:                     bush_id=store.bush_id,
+ 1460:                     chat_id=(
+ 1461:                         recipient.telegram_id
+ 1462:                     ),
+ 1463:                     suffix=(
+ 1464:                         "closing-deadline-missed"
+ 1465:                     ),
+ 1466:                     scheduled_for=queued_at,
+ 1467:                     message_text=message_text,
+ 1468:                     payload_json={
+ 1469:                         "report_id": report.id,
+ 1470:                         "store_id": store.id,
+ 1471:                         "store_code": (
+ 1472:                             self.store_display_name(
+ 1473:                                 store
+ 1474:                             )
+ 1475:                         ),
+ 1476:                         "business_date": (
+ 1477:                             report.business_date
+ 1478:                             .isoformat()
+ 1479:                         ),
+ 1480:                         "scheduled_close_time": (
+ 1481:                             report
+ 1482:                             .scheduled_close_time
+ 1483:                             .strftime("%H:%M")
+ 1484:                         ),
+ 1485:                         "control_deadline": (
+ 1486:                             report
+ 1487:                             .control_deadline
+ 1488:                             .strftime("%H:%M")
+ 1489:                         ),
+ 1490:                         "recipient_role": (
+ 1491:                             recipient.role.value
+ 1492:                         ),
+ 1493:                         "parse_mode": "HTML",
+ 1494:                     },
+ 1495:                 )
+ 1496:             )
+ 1497: 
+ 1498:             notifications.append(
+ 1499:                 notification
+ 1500:             )
+ 1501: 
+ 1502:             if was_created:
+ 1503:                 created_count += 1
+ 1504: 
+ 1505:         return notifications, created_count
+ 1506: 
+ 1507:     async def get_alert_recipients(
+ 1508:         self,
+ 1509:         store: Store,
+ 1510:     ) -> list[User]:
+ 1511:         """Повертає отримувачів вечірнього сповіщення."""
+ 1512: 
+ 1513:         recipients: dict[int, User] = {}
+ 1514: 
+ 1515:         store_users = (
+ 1516:             await self.repositories.bindings
+ 1517:             .get_users_for_store(
+ 1518:                 store.id,
+ 1519:                 active_only=True,
+ 1520:             )
+ 1521:         )
+ 1522: 
+ 1523:         for user in store_users:
+ 1524:             recipients[user.id] = user
+ 1525: 
+ 1526:         if store.bush_id is not None:
+ 1527:             bush_users = (
+ 1528:                 await self.repositories.bindings
+ 1529:                 .get_users_for_bush(
+ 1530:                     store.bush_id,
+ 1531:                     active_only=True,
+ 1532:                 )
+ 1533:             )
+ 1534: 
+ 1535:             for user in bush_users:
+ 1536:                 recipients[user.id] = user
+ 1537: 
+ 1538:         statement = (
+ 1539:             select(User)
+ 1540:             .where(
+ 1541:                 User.role.in_(
+ 1542:                     {
+ 1543:                         UserRole.ROOT_ADMIN,
+ 1544:                         UserRole.DIRECTOR,
+ 1545:                     }
+ 1546:                 ),
+ 1547:                 User.status == UserStatus.ACTIVE,
+ 1548:                 User.is_blocked.is_(False),
+ 1549:             )
+ 1550:             .order_by(User.id.asc())
+ 1551:         )
+ 1552: 
+ 1553:         result = await self.session.scalars(
+ 1554:             statement
+ 1555:         )
+ 1556: 
+ 1557:         for user in result.unique().all():
+ 1558:             recipients[user.id] = user
+ 1559: 
+ 1560:         return list(recipients.values())
+ 1561: 
+ 1562:     # ==========================================
+ 1563:     # ЖИВІ ПІДСУМКИ
+ 1564:     # ==========================================
+ 1565: 
+ 1566:     async def prepare_summary_updates(
+ 1567:         self,
+ 1568:         *,
+ 1569:         business_date: date,
+ 1570:         changed_store: Store | None = None,
+ 1571:         bush_ids: set[int] | None = None,
+ 1572:         timezone_name: str | None = None,
+ 1573:     ) -> list[SummaryUpdateDecision]:
+ 1574:         """
+ 1575:         Готує оновлення вечірніх підсумків.
+ 1576: 
+ 1577:         Повертає рішення для Telegram worker:
+ 1578: 
+ 1579:         - надіслати нове повідомлення;
+ 1580:         - відредагувати існуюче;
+ 1581:         - нічого не робити.
+ 1582:         """
+ 1583: 
+ 1584:         summaries_enabled = (
+ 1585:             await self.repositories.settings
+ 1586:             .get_bool(
+ 1587:                 self.repositories.settings
+ 1588:                 .CLOSING_SUMMARIES_ENABLED,
+ 1589:                 default=True,
+ 1590:             )
+ 1591:         )
+ 1592: 
+ 1593:         live_updates_enabled = (
+ 1594:             await self.repositories.settings
+ 1595:             .get_bool(
+ 1596:                 self.repositories.settings
+ 1597:                 .LIVE_SUMMARY_UPDATES_ENABLED,
+ 1598:                 default=True,
+ 1599:             )
+ 1600:         )
+ 1601: 
+ 1602:         if (
+ 1603:             not summaries_enabled
+ 1604:             or not live_updates_enabled
+ 1605:         ):
+ 1606:             return []
+ 1607: 
+ 1608:         closing_group_id = (
+ 1609:             await self.repositories.settings
+ 1610:             .get_closing_group_id()
+ 1611:         )
+ 1612: 
+ 1613:         if closing_group_id is None:
+ 1614:             return []
+ 1615: 
+ 1616:         resolved_timezone = (
+ 1617:             timezone_name
+ 1618:             or await self.get_timezone_name()
+ 1619:         )
+ 1620: 
+ 1621:         target_bush_ids = set(
+ 1622:             bush_ids or set()
+ 1623:         )
+ 1624: 
+ 1625:         if (
+ 1626:             changed_store is not None
+ 1627:             and changed_store.bush_id is not None
+ 1628:         ):
+ 1629:             target_bush_ids.add(
+ 1630:                 changed_store.bush_id
+ 1631:             )
+ 1632: 
+ 1633:         decisions: list[
+ 1634:             SummaryUpdateDecision
+ 1635:         ] = []
+ 1636: 
+ 1637:         bush_summary_type = (
+ 1638:             self.resolve_summary_type(
+ 1639:                 "closing_bush",
+ 1640:                 "bush_closing",
+ 1641:                 "closing_bush_summary",
+ 1642:                 "bush_closing_summary",
+ 1643:             )
+ 1644:         )
+ 1645: 
+ 1646:         for bush_id in sorted(
+ 1647:             target_bush_ids
+ 1648:         ):
+ 1649:             bush = await self.session.get(
+ 1650:                 Bush,
+ 1651:                 bush_id,
+ 1652:             )
+ 1653: 
+ 1654:             if bush is None:
+ 1655:                 continue
+ 1656: 
+ 1657:             message_text, snapshot = (
+ 1658:                 await self.build_bush_summary(
+ 1659:                     bush=bush,
+ 1660:                     business_date=business_date,
+
+====================================================================================================
+app\services\closing_service.py [1700-1830]
+====================================================================================================
+ 1700: 
+ 1701:         network_text, network_snapshot = (
+ 1702:             await self.build_network_summary(
+ 1703:                 business_date=business_date,
+ 1704:                 timezone_name=resolved_timezone,
+ 1705:             )
+ 1706:         )
+ 1707: 
+ 1708:         network_topic_id = (
+ 1709:             await self.repositories.settings
+ 1710:             .get_int(
+ 1711:                 self.repositories.settings
+ 1712:                 .NETWORK_SUMMARY_TOPIC_ID,
+ 1713:                 default=None,
+ 1714:             )
+ 1715:         )
+ 1716: 
+ 1717:         network_decision = (
+ 1718:             await self.repositories
+ 1719:             .daily_summaries
+ 1720:             .prepare_update(
+ 1721:                 summary_type=(
+ 1722:                     network_summary_type
+ 1723:                 ),
+ 1724:                 business_date=business_date,
+ 1725:                 chat_id=closing_group_id,
+ 1726:                 bush_id=None,
+ 1727:                 topic_id=network_topic_id,
+ 1728:                 message_text=network_text,
+ 1729:                 snapshot_json=(
+ 1730:                     network_snapshot
+ 1731:                 ),
+ 1732:             )
+ 1733:         )
+ 1734: 
+ 1735:         decisions.append(network_decision)
+ 1736: 
+ 1737:         return decisions
+ 1738: 
+ 1739:     async def prepare_all_closing_summaries(
+ 1740:         self,
+ 1741:         *,
+ 1742:         business_date: date,
+ 1743:         timezone_name: str | None = None,
+ 1744:     ) -> list[SummaryUpdateDecision]:
+ 1745:         """Готує підсумки всіх активних кущів."""
+ 1746: 
+ 1747:         statement = (
+ 1748:             select(Bush.id)
+ 1749:             .where(
+ 1750:                 Bush.is_active.is_(True)
+ 1751:             )
+ 1752:             .order_by(Bush.id.asc())
+ 1753:         )
+ 1754: 
+ 1755:         result = await self.session.scalars(
+ 1756:             statement
+ 1757:         )
+ 1758: 
+ 1759:         bush_ids = {
+ 1760:             int(bush_id)
+ 1761:             for bush_id in result.all()
+ 1762:         }
+ 1763: 
+ 1764:         return await self.prepare_summary_updates(
+ 1765:             business_date=business_date,
+ 1766:             bush_ids=bush_ids,
+ 1767:             timezone_name=timezone_name,
+ 1768:         )
+ 1769: 
+ 1770:     async def build_bush_summary(
+ 1771:         self,
+ 1772:         *,
+ 1773:         bush: Bush,
+ 1774:         business_date: date,
+ 1775:         timezone_name: str,
+ 1776:     ) -> tuple[str, dict[str, Any]]:
+ 1777:         """Формує вечірній підсумок куща."""
+ 1778: 
+ 1779:         statistics = (
+ 1780:             await self.repositories.closings
+ 1781:             .get_daily_statistics(
+ 1782:                 business_date=business_date,
+ 1783:                 bush_id=bush.id,
+ 1784:             )
+ 1785:         )
+ 1786: 
+ 1787:         problem_reports = (
+ 1788:             await self.repositories.closings
+ 1789:             .get_problem_reports(
+ 1790:                 business_date=business_date,
+ 1791:                 bush_id=bush.id,
+ 1792:             )
+ 1793:         )
+ 1794: 
+ 1795:         waiting_reports = (
+ 1796:             await self.repositories.closings
+ 1797:             .get_waiting_for_date(
+ 1798:                 business_date=business_date,
+ 1799:                 bush_id=bush.id,
+ 1800:             )
+ 1801:         )
+ 1802: 
+ 1803:         problem_lines = (
+ 1804:             await self.build_report_lines(
+ 1805:                 problem_reports,
+ 1806:                 timezone_name=timezone_name,
+ 1807:             )
+ 1808:         )
+ 1809: 
+ 1810:         waiting_lines = (
+ 1811:             await self.build_report_lines(
+ 1812:                 waiting_reports,
+ 1813:                 timezone_name=timezone_name,
+ 1814:             )
+ 1815:         )
+ 1816: 
+ 1817:         bush_name = escape(
+ 1818:             str(
+ 1819:                 getattr(
+ 1820:                     bush,
+ 1821:                     "name",
+ 1822:                     f"Кущ №{bush.id}",
+ 1823:                 )
+ 1824:             )
+ 1825:         )
+ 1826: 
+ 1827:         lines = [
+ 1828:             (
+ 1829:                 "🌙 <b>Закриття ТТ — "
+ 1830:                 f"{bush_name}</b>"
+
+====================================================================================================
+app\services\closing_service.py [2010-2100]
+====================================================================================================
+ 2010:                     *problem_lines[:30],
+ 2011:                 ]
+ 2012:             )
+ 2013: 
+ 2014:         snapshot = {
+ 2015:             **statistics,
+ 2016:             "total_cash": str(
+ 2017:                 statistics["total_cash"]
+ 2018:             ),
+ 2019:             "average_cash": str(
+ 2020:                 statistics["average_cash"]
+ 2021:             ),
+ 2022:             "maximum_cash": str(
+ 2023:                 statistics["maximum_cash"]
+ 2024:             ),
+ 2025:             "minimum_cash": str(
+ 2026:                 statistics["minimum_cash"]
+ 2027:             ),
+ 2028:             "business_date": (
+ 2029:                 business_date.isoformat()
+ 2030:             ),
+ 2031:             "problem_report_ids": [
+ 2032:                 report.id
+ 2033:                 for report in problem_reports
+ 2034:             ],
+ 2035:         }
+ 2036: 
+ 2037:         return "\n".join(lines), snapshot
+ 2038: 
+ 2039:     # ==========================================
+ 2040:     # РЯДКИ ТОРГОВИХ ТОЧОК
+ 2041:     # ==========================================
+ 2042: 
+ 2043:     async def build_report_lines(
+ 2044:         self,
+ 2045:         reports: list[ClosingReport],
+ 2046:         *,
+ 2047:         timezone_name: str,
+ 2048:     ) -> list[str]:
+ 2049:         """Формує короткі рядки звітів."""
+ 2050: 
+ 2051:         if not reports:
+ 2052:             return []
+ 2053: 
+ 2054:         stores = await self.load_stores(
+ 2055:             {
+ 2056:                 report.store_id
+ 2057:                 for report in reports
+ 2058:             }
+ 2059:         )
+ 2060: 
+ 2061:         store_map = {
+ 2062:             store.id: store
+ 2063:             for store in stores
+ 2064:         }
+ 2065: 
+ 2066:         timezone = self.get_timezone(
+ 2067:             timezone_name
+ 2068:         )
+ 2069: 
+ 2070:         lines: list[str] = []
+ 2071: 
+ 2072:         sorted_reports = sorted(
+ 2073:             reports,
+ 2074:             key=lambda report: (
+ 2075:                 0
+ 2076:                 if self.is_missed_report(report)
+ 2077:                 else 1,
+ 2078:                 report.store_id,
+ 2079:             ),
+ 2080:         )
+ 2081: 
+ 2082:         for report in sorted_reports:
+ 2083:             store = store_map.get(
+ 2084:                 report.store_id
+ 2085:             )
+ 2086: 
+ 2087:             store_name = escape(
+ 2088:                 self.store_display_name(
+ 2089:                     store
+ 2090:                 )
+ 2091:             )
+ 2092: 
+ 2093:             details = [
+ 2094:                 self.closing_status_text(
+ 2095:                     report.status
+ 2096:                 )
+ 2097:             ]
+ 2098: 
+ 2099:             submitted_at = getattr(
+ 2100:                 report,
+
+====================================================================================================
+app\services\closing_service.py [2340-2425]
+====================================================================================================
+ 2340: 
+ 2341:         await self.repositories.audit.log_update(
+ 2342:             action=action,
+ 2343:             entity_type=entity_type,
+ 2344:             entity_id=report.id,
+ 2345:             old_values=previous_values,
+ 2346:             new_values=current_values,
+ 2347:             context=AuditContext(
+ 2348:                 actor_user_id=actor.id,
+ 2349:                 business_date=(
+ 2350:                     report.business_date
+ 2351:                 ),
+ 2352:                 reason=reason,
+ 2353:                 description=(
+ 2354:                     f"{description}: "
+ 2355:                     f"{self.store_display_name(store)}"
+ 2356:                 ),
+ 2357:                 source="telegram_bot",
+ 2358:             ),
+ 2359:             skip_if_unchanged=False,
+ 2360:         )
+ 2361: 
+ 2362:     # ==========================================
+ 2363:     # ТЕКСТИ ПОВІДОМЛЕНЬ
+ 2364:     # ==========================================
+ 2365: 
+ 2366:     @classmethod
+ 2367:     def build_group_report_text(
+ 2368:         cls,
+ 2369:         *,
+ 2370:         store: Store,
+ 2371:         report: ClosingReport,
+ 2372:         timezone_name: str,
+ 2373:     ) -> str:
+ 2374:         """Формує підпис до фото чека."""
+ 2375: 
+ 2376:         timezone = cls.get_timezone(
+ 2377:             timezone_name
+ 2378:         )
+ 2379: 
+ 2380:         submitted_at = getattr(
+ 2381:             report,
+ 2382:             "actual_submitted_at",
+ 2383:             None,
+ 2384:         )
+ 2385: 
+ 2386:         submitted_time_text = (
+ 2387:             submitted_at
+ 2388:             .astimezone(timezone)
+ 2389:             .strftime("%H:%M")
+ 2390:             if submitted_at is not None
+ 2391:             else "не вказано"
+ 2392:         )
+ 2393: 
+ 2394:         return "\n".join(
+ 2395:             [
+ 2396:                 "🌙 <b>Вечірній звіт ТТ</b>",
+ 2397:                 "",
+ 2398:                 (
+ 2399:                     "🏪 Торгова точка: "
+ 2400:                     f"<b>{escape(cls.store_display_name(store))}</b>"
+ 2401:                 ),
+ 2402:                 (
+ 2403:                     "📅 Дата: "
+ 2404:                     f"<b>{report.business_date.strftime('%d.%m.%Y')}</b>"
+ 2405:                 ),
+ 2406:                 (
+ 2407:                     "🕘 Подано о: "
+ 2408:                     f"<b>{submitted_time_text}</b>"
+ 2409:                 ),
+ 2410:                 (
+ 2411:                     "💰 Каса: "
+ 2412:                     f"<b>{cls.format_money(report.cash_amount)}</b>"
+ 2413:                 ),
+ 2414:                 (
+ 2415:                     "📊 Статус: "
+ 2416:                     f"<b>{escape(cls.closing_status_text(report.status))}</b>"
+ 2417:                 ),
+ 2418:             ]
+ 2419:         )
+ 2420: 
+ 2421:     @classmethod
+ 2422:     def build_missed_notification_text(
+ 2423:         cls,
+ 2424:         *,
+ 2425:         store: Store,
+
+====================================================================================================
+app\services\closing_service.py [2520-2905]
+====================================================================================================
+ 2520:     ) -> list[Store]:
+ 2521:         """Завантажує ТТ одним SQL-запитом."""
+ 2522: 
+ 2523:         if not store_ids:
+ 2524:             return []
+ 2525: 
+ 2526:         statement = (
+ 2527:             select(Store)
+ 2528:             .where(
+ 2529:                 Store.id.in_(store_ids)
+ 2530:             )
+ 2531:             .order_by(
+ 2532:                 Store.store_number.asc()
+ 2533:             )
+ 2534:         )
+ 2535: 
+ 2536:         result = await self.session.scalars(
+ 2537:             statement
+ 2538:         )
+ 2539: 
+ 2540:         return list(
+ 2541:             result.unique().all()
+ 2542:         )
+ 2543: 
+ 2544:     async def get_store_bush(
+ 2545:         self,
+ 2546:         store: Store,
+ 2547:     ) -> Bush | None:
+ 2548:         """Повертає кущ торгової точки."""
+ 2549: 
+ 2550:         if store.bush_id is None:
+ 2551:             return None
+ 2552: 
+ 2553:         return await self.session.get(
+ 2554:             Bush,
+ 2555:             store.bush_id,
+ 2556:         )
+ 2557: 
+ 2558:     async def get_timezone_name(
+ 2559:         self,
+ 2560:     ) -> str:
+ 2561:         """Повертає системний часовий пояс."""
+ 2562: 
+ 2563:         return (
+ 2564:             await self.repositories.settings
+ 2565:             .get_default_timezone()
+ 2566:         )
+ 2567: 
+ 2568:     # ==========================================
+ 2569:     # СТАТУСИ
+ 2570:     # ==========================================
+ 2571: 
+ 2572:     @staticmethod
+ 2573:     def is_late_report(
+ 2574:         report: ClosingReport,
+ 2575:     ) -> bool:
+ 2576:         """Чи поданий звіт із запізненням."""
+ 2577: 
+ 2578:         status_values = {
+ 2579:             report.status.name.lower(),
+ 2580:             str(report.status.value).lower(),
+ 2581:         }
+ 2582: 
+ 2583:         return bool(
+ 2584:             status_values.intersection(
+ 2585:                 {
+ 2586:                     "submitted_late",
+ 2587:                     "late",
+ 2588:                     "closed_late",
+ 2589:                 }
+ 2590:             )
+ 2591:         )
+ 2592: 
+ 2593:     @staticmethod
+ 2594:     def is_missed_report(
+ 2595:         report: ClosingReport,
+ 2596:     ) -> bool:
+ 2597:         """Чи пропущений дедлайн звіту."""
+ 2598: 
+ 2599:         status_values = {
+ 2600:             report.status.name.lower(),
+ 2601:             str(report.status.value).lower(),
+ 2602:         }
+ 2603: 
+ 2604:         return bool(
+ 2605:             status_values.intersection(
+ 2606:                 {
+ 2607:                     "missed_deadline",
+ 2608:                     "deadline_missed",
+ 2609:                     "not_submitted",
+ 2610:                 }
+ 2611:             )
+ 2612:         )
+ 2613: 
+ 2614:     @staticmethod
+ 2615:     def closing_status_text(
+ 2616:         status: ClosingStatus,
+ 2617:     ) -> str:
+ 2618:         """Повертає зрозумілий текст статусу."""
+ 2619: 
+ 2620:         values = {
+ 2621:             status.name.lower(),
+ 2622:             str(status.value).lower(),
+ 2623:         }
+ 2624: 
+ 2625:         translations = (
+ 2626:             (
+ 2627:                 {
+ 2628:                     "waiting",
+ 2629:                     "pending",
+ 2630:                 },
+ 2631:                 "очікується",
+ 2632:             ),
+ 2633:             (
+ 2634:                 {
+ 2635:                     "submitted_on_time",
+ 2636:                     "on_time",
+ 2637:                 },
+ 2638:                 "подано вчасно",
+ 2639:             ),
+ 2640:             (
+ 2641:                 {
+ 2642:                     "submitted_late",
+ 2643:                     "late",
+ 2644:                     "closed_late",
+ 2645:                 },
+ 2646:                 "подано із запізненням",
+ 2647:             ),
+ 2648:             (
+ 2649:                 {
+ 2650:                     "missed_deadline",
+ 2651:                     "deadline_missed",
+ 2652:                     "not_submitted",
+ 2653:                 },
+ 2654:                 "дедлайн пропущено",
+ 2655:             ),
+ 2656:             (
+ 2657:                 {
+ 2658:                     "manually_confirmed",
+ 2659:                     "manual_confirmed",
+ 2660:                 },
+ 2661:                 "підтверджено вручну",
+ 2662:             ),
+ 2663:             (
+ 2664:                 {
+ 2665:                     "not_required",
+ 2666:                 },
+ 2667:                 "звіт не потрібен",
+ 2668:             ),
+ 2669:             (
+ 2670:                 {
+ 2671:                     "day_off",
+ 2672:                 },
+ 2673:                 "вихідний",
+ 2674:             ),
+ 2675:             (
+ 2676:                 {
+ 2677:                     "temporarily_closed",
+ 2678:                     "temporary_closed",
+ 2679:                 },
+ 2680:                 "тимчасово закрито",
+ 2681:             ),
+ 2682:         )
+ 2683: 
+ 2684:         for aliases, text in translations:
+ 2685:             if values.intersection(aliases):
+ 2686:                 return text
+ 2687: 
+ 2688:         return str(status.value)
+ 2689: 
+ 2690:     # ==========================================
+ 2691:     # ENUM-РЕЗОЛВЕРИ
+ 2692:     # ==========================================
+ 2693: 
+ 2694:     @classmethod
+ 2695:     def resolve_notification_type(
+ 2696:         cls,
+ 2697:         *names: str,
+ 2698:     ) -> NotificationType:
+ 2699:         """Знаходить тип повідомлення."""
+ 2700: 
+ 2701:         return cls.resolve_enum_member(
+ 2702:             NotificationType,
+ 2703:             *names,
+ 2704:         )
+ 2705: 
+ 2706:     @classmethod
+ 2707:     def resolve_summary_type(
+ 2708:         cls,
+ 2709:         *names: str,
+ 2710:     ) -> SummaryType:
+ 2711:         """Знаходить тип підсумку."""
+ 2712: 
+ 2713:         return cls.resolve_enum_member(
+ 2714:             SummaryType,
+ 2715:             *names,
+ 2716:         )
+ 2717: 
+ 2718:     @classmethod
+ 2719:     def resolve_audit_action(
+ 2720:         cls,
+ 2721:         *names: str,
+ 2722:     ) -> AuditAction:
+ 2723:         """Знаходить AuditAction."""
+ 2724: 
+ 2725:         try:
+ 2726:             return cls.resolve_enum_member(
+ 2727:                 AuditAction,
+ 2728:                 *names,
+ 2729:             )
+ 2730: 
+ 2731:         except ValueError:
+ 2732:             return cls.resolve_enum_member(
+ 2733:                 AuditAction,
+ 2734:                 "update",
+ 2735:                 "updated",
+ 2736:                 "change",
+ 2737:                 "changed",
+ 2738:             )
+ 2739: 
+ 2740:     @classmethod
+ 2741:     def resolve_entity_type(
+ 2742:         cls,
+ 2743:         *names: str,
+ 2744:     ) -> EntityType:
+ 2745:         """Знаходить EntityType."""
+ 2746: 
+ 2747:         return cls.resolve_enum_member(
+ 2748:             EntityType,
+ 2749:             *names,
+ 2750:         )
+ 2751: 
+ 2752:     @staticmethod
+ 2753:     def resolve_enum_member(
+ 2754:         enum_class: type[EnumType],
+ 2755:         *names: str,
+ 2756:     ) -> EnumType:
+ 2757:         """
+ 2758:         Шукає enum за назвою або значенням.
+ 2759:         """
+ 2760: 
+ 2761:         normalized_names = {
+ 2762:             name.strip().lower()
+ 2763:             for name in names
+ 2764:             if name.strip()
+ 2765:         }
+ 2766: 
+ 2767:         for enum_item in enum_class:
+ 2768:             candidates = {
+ 2769:                 enum_item.name.lower(),
+ 2770:                 str(enum_item.value).lower(),
+ 2771:             }
+ 2772: 
+ 2773:             if candidates.intersection(
+ 2774:                 normalized_names
+ 2775:             ):
+ 2776:                 return enum_item
+ 2777: 
+ 2778:         raise ValueError(
+ 2779:             f"У {enum_class.__name__} відсутнє "
+ 2780:             f"значення: {sorted(normalized_names)}."
+ 2781:         )
+ 2782: 
+ 2783:     # ==========================================
+ 2784:     # ГРАФІК
+ 2785:     # ==========================================
+ 2786: 
+ 2787:     @staticmethod
+ 2788:     def ensure_closing_required(
+ 2789:         schedule: EffectiveSchedule,
+ 2790:     ) -> None:
+ 2791:         """Перевіряє необхідність вечірнього звіту."""
+ 2792: 
+ 2793:         if not schedule.is_working_day:
+ 2794:             raise ValueError(
+ 2795:                 schedule.reason
+ 2796:                 or (
+ 2797:                     "Сьогодні для цієї ТТ "
+ 2798:                     "встановлено вихідний."
+ 2799:                 )
+ 2800:             )
+ 2801: 
+ 2802:         if not schedule.requires_closing:
+ 2803:             raise ValueError(
+ 2804:                 "Для цієї торгової точки не "
+ 2805:                 "налаштовано вечірній контроль."
+ 2806:             )
+ 2807: 
+ 2808:         if schedule.closing_time is None:
+ 2809:             raise ValueError(
+ 2810:                 "Не вказано час закриття ТТ."
+ 2811:             )
+ 2812: 
+ 2813:         if (
+ 2814:             schedule.closing_control_deadline
+ 2815:             is None
+ 2816:         ):
+ 2817:             raise ValueError(
+ 2818:                 "Не вказано дедлайн вечірнього звіту."
+ 2819:             )
+ 2820: 
+ 2821:     # ==========================================
+ 2822:     # НАЗВИ ТТ І TELEGRAM-ТЕМИ
+ 2823:     # ==========================================
+ 2824: 
+ 2825:     @staticmethod
+ 2826:     def store_display_name(
+ 2827:         store: Store | None,
+ 2828:     ) -> str:
+ 2829:         """Формує коротку назву ТТ."""
+ 2830: 
+ 2831:         if store is None:
+ 2832:             return "Невідома ТТ"
+ 2833: 
+ 2834:         code = getattr(
+ 2835:             store,
+ 2836:             "code",
+ 2837:             None,
+ 2838:         )
+ 2839: 
+ 2840:         if code:
+ 2841:             return str(code)
+ 2842: 
+ 2843:         store_number = getattr(
+ 2844:             store,
+ 2845:             "store_number",
+ 2846:             None,
+ 2847:         )
+ 2848: 
+ 2849:         if store_number is not None:
+ 2850:             return f"SB-{store_number}"
+ 2851: 
+ 2852:         return f"ТТ #{store.id}"
+ 2853: 
+ 2854:     @staticmethod
+ 2855:     def get_bush_closing_topic_id(
+ 2856:         bush: Bush | None,
+ 2857:     ) -> int | None:
+ 2858:         """Повертає Telegram topic_id закриттів."""
+ 2859: 
+ 2860:         if bush is None:
+ 2861:             return None
+ 2862: 
+ 2863:         for field_name in (
+ 2864:             "closing_topic_id",
+ 2865:             "telegram_closing_topic_id",
+ 2866:             "telegram_topic_id",
+ 2867:             "topic_id",
+ 2868:         ):
+ 2869:             value = getattr(
+ 2870:                 bush,
+ 2871:                 field_name,
+ 2872:                 None,
+ 2873:             )
+ 2874: 
+ 2875:             if (
+ 2876:                 isinstance(value, int)
+ 2877:                 and value > 0
+ 2878:             ):
+ 2879:                 return value
+ 2880: 
+ 2881:         return None
+ 2882: 
+ 2883:     # ==========================================
+ 2884:     # КАСА
+ 2885:     # ==========================================
+ 2886: 
+ 2887:     @staticmethod
+ 2888:     def normalize_cash_amount(
+ 2889:         value: Decimal | int | float | str,
+ 2890:     ) -> Decimal:
+ 2891:         """
+ 2892:         Нормалізує суму каси.
+ 2893: 
+ 2894:         Підтримуються формати:
+ 2895: 
+ 2896:         15420
+ 2897:         15420.50
+ 2898:         15420,50
+ 2899:         15 420,50 грн
+ 2900:         """
+ 2901: 
+ 2902:         if isinstance(value, bool):
+ 2903:             raise ValueError(
+ 2904:                 "Сума каси вказана некоректно."
+ 2905:             )

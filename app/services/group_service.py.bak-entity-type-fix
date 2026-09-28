@@ -1820,7 +1820,11 @@ class GroupService:
         )
 
         entity_type = (
-            EntityType.SYSTEM_SETTING
+            self.resolve_entity_type(
+                "setting",
+                "system",
+                "configuration",
+            )
         )
 
         await self.repositories.audit.log_action(

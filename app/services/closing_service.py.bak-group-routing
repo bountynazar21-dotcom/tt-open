@@ -33,10 +33,6 @@ from app.repositories import (
     SummaryUpdateDecision,
 )
 from app.services.access import AccessService
-from app.services.group_service import (
-    GroupService,
-    TelegramGroupTopic,
-)
 
 
 EnumType = TypeVar(
@@ -175,7 +171,6 @@ class ClosingService:
         repositories: Repositories,
         *,
         access_service: AccessService | None = None,
-        group_service: GroupService | None = None,
     ) -> None:
         self.repositories = repositories
         self.session = repositories.session
@@ -183,14 +178,6 @@ class ClosingService:
         self.access = (
             access_service
             or AccessService(repositories)
-        )
-
-        self.groups = (
-            group_service
-            or GroupService(
-                repositories,
-                access_service=self.access,
-            )
         )
 
     # ==========================================
@@ -744,17 +731,12 @@ class ClosingService:
         для Telegram-групи закриттів.
         """
 
-        destination = (
-            await self.groups.resolve_destination(
-                topic=(
-                    TelegramGroupTopic.CLOSING
-                ),
-                bush_id=store.bush_id,
-                fallback_to_network=True,
-            )
+        group_id = (
+            await self.repositories.settings
+            .get_closing_group_id()
         )
 
-        if destination is None:
+        if group_id is None:
             return None, False
 
         notification_type = (
@@ -774,6 +756,10 @@ class ClosingService:
             )
         )
 
+        topic_id = self.get_bush_closing_topic_id(
+            await self.get_store_bush(store)
+        )
+
         receipt_file_id = getattr(
             report,
             "receipt_file_id",
@@ -791,12 +777,8 @@ class ClosingService:
                 ),
                 store_id=store.id,
                 bush_id=store.bush_id,
-                chat_id=(
-                    destination.chat_id
-                ),
-                topic_id=(
-                    destination.message_thread_id
-                ),
+                chat_id=group_id,
+                topic_id=topic_id,
                 suffix="closing-report-group",
                 scheduled_for=queued_at,
                 message_text=message_text,
@@ -825,15 +807,6 @@ class ClosingService:
                     ),
                     "caption": message_text,
                     "parse_mode": "HTML",
-                    "routing_scope": (
-                        destination.scope.value
-                    ),
-                    "routing_topic": (
-                        destination.topic.value
-                    ),
-                    "routing_bush_id": (
-                        destination.bush_id
-                    ),
                 },
             )
         )
@@ -1632,6 +1605,14 @@ class ClosingService:
         ):
             return []
 
+        closing_group_id = (
+            await self.repositories.settings
+            .get_closing_group_id()
+        )
+
+        if closing_group_id is None:
+            return []
+
         resolved_timezone = (
             timezone_name
             or await self.get_timezone_name()
@@ -1673,19 +1654,6 @@ class ClosingService:
             if bush is None:
                 continue
 
-            bush_destination = (
-                await self.groups.resolve_destination(
-                    topic=(
-                        TelegramGroupTopic.SUMMARIES
-                    ),
-                    bush_id=bush.id,
-                    fallback_to_network=True,
-                )
-            )
-
-            if bush_destination is None:
-                continue
-
             message_text, snapshot = (
                 await self.build_bush_summary(
                     bush=bush,
@@ -1706,13 +1674,13 @@ class ClosingService:
                     business_date=(
                         business_date
                     ),
-                    chat_id=(
-                        bush_destination.chat_id
-                    ),
+                    chat_id=closing_group_id,
                     bush_id=bush.id,
                     topic_id=(
-                        bush_destination
-                        .message_thread_id
+                        self
+                        .get_bush_closing_topic_id(
+                            bush
+                        )
                     ),
                     message_text=message_text,
                     snapshot_json=snapshot,
@@ -1737,18 +1705,14 @@ class ClosingService:
             )
         )
 
-        network_destination = (
-            await self.groups.resolve_destination(
-                topic=(
-                    TelegramGroupTopic.SUMMARIES
-                ),
-                bush_id=None,
-                fallback_to_network=True,
+        network_topic_id = (
+            await self.repositories.settings
+            .get_int(
+                self.repositories.settings
+                .NETWORK_SUMMARY_TOPIC_ID,
+                default=None,
             )
         )
-
-        if network_destination is None:
-            return decisions
 
         network_decision = (
             await self.repositories
@@ -1758,14 +1722,9 @@ class ClosingService:
                     network_summary_type
                 ),
                 business_date=business_date,
-                chat_id=(
-                    network_destination.chat_id
-                ),
+                chat_id=closing_group_id,
                 bush_id=None,
-                topic_id=(
-                    network_destination
-                    .message_thread_id
-                ),
+                topic_id=network_topic_id,
                 message_text=network_text,
                 snapshot_json=(
                     network_snapshot

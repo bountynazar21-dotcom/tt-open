@@ -808,35 +808,6 @@ class GroupService:
         )
 
     # ==========================================
-    # GET GROUP BY CHAT ID
-    # ==========================================
-
-    async def get_group_by_chat_id(
-        self,
-        chat_id: int,
-    ) -> GroupBindingView | None:
-        """
-        ???????? ????????????? Telegram-?????
-        ?? ?? chat_id.
-
-        Network group ???????????? ?
-        SystemSetting, ???? lookup ?????????
-        ????? canonical get_network_group().
-        """
-
-        network_group = (
-            await self.get_network_group()
-        )
-
-        if (
-            network_group is not None
-            and network_group.chat_id == chat_id
-        ):
-            return network_group
-
-        return None
-
-    # ==========================================
     # GET BUSH GROUP
     # ==========================================
 
@@ -1405,12 +1376,12 @@ class GroupService:
         if scope == TelegramGroupScope.NETWORK:
             return (
                 f"{cls.SETTINGS_PREFIX}"
-                "_network"
+                ".network"
             )
 
         return (
             f"{cls.SETTINGS_PREFIX}"
-            f"_bush_{bush_id}"
+            f".bush.{bush_id}"
         )
 
     @classmethod
@@ -1426,7 +1397,7 @@ class GroupService:
 
         return (
             f"{cls.scope_prefix(scope=scope, bush_id=bush_id)}"
-            "_chat_id"
+            ".chat_id"
         )
 
     @classmethod
@@ -1442,7 +1413,7 @@ class GroupService:
 
         return (
             f"{cls.scope_prefix(scope=scope, bush_id=bush_id)}"
-            "_title"
+            ".title"
         )
 
     @classmethod
@@ -1464,7 +1435,7 @@ class GroupService:
 
         return (
             f"{cls.scope_prefix(scope=scope, bush_id=bush_id)}"
-            f"_{topic.value}_thread_id"
+            f".{topic.value}.thread_id"
         )
 
     # ==========================================
@@ -1552,18 +1523,29 @@ class GroupService:
         now = datetime.now(UTC)
 
         if setting is None:
-            setting = SystemSetting.create(
-                key=normalized_key,
-                display_name=normalized_key,
-                value=normalized_value,
-                value_type="string",
-                category="telegram",
-                description=(
-                    "Telegram group/topic routing setting."
+            payload = {
+                "key": normalized_key,
+                "name": normalized_key,
+                "setting_key": (
+                    normalized_key
                 ),
-                is_editable=True,
-                is_secret=False,
-                requires_restart=False,
+
+                "value": normalized_value,
+                "setting_value": (
+                    normalized_value
+                ),
+                "value_text": (
+                    normalized_value
+                ),
+
+                "created_at": now,
+                "updated_at": now,
+            }
+
+            setting = SystemSetting(
+                **self.filter_setting_payload(
+                    payload
+                )
             )
 
             self.session.add(
@@ -1689,7 +1671,6 @@ class GroupService:
         """
 
         for field_name in (
-            "value_json",
             "value",
             "setting_value",
             "value_text",
@@ -1715,7 +1696,6 @@ class GroupService:
         """
 
         for field_name in (
-            "value_json",
             "value",
             "setting_value",
             "value_text",
@@ -1815,12 +1795,17 @@ class GroupService:
 
         action = (
             self.resolve_audit_action(
-                "updated",
+                "update",
+                "changed",
             )
         )
 
         entity_type = (
-            EntityType.SYSTEM_SETTING
+            self.resolve_entity_type(
+                "setting",
+                "system",
+                "configuration",
+            )
         )
 
         await self.repositories.audit.log_action(
@@ -1876,7 +1861,7 @@ class GroupService:
 
         result = cls.resolve_enum_member(
             AuditAction,
-            "updated",
+            "update",
             default=None,
         )
 
