@@ -744,18 +744,30 @@ class ClosingService:
         для Telegram-групи закриттів.
         """
 
-        destination = (
-            await self.groups.resolve_destination(
-                topic=(
-                    TelegramGroupTopic.CLOSING
-                ),
-                bush_id=store.bush_id,
-                fallback_to_network=True,
-            )
+        network_group = (
+            await self.groups.get_network_group()
         )
 
-        if destination is None:
+        if network_group is None:
             return None, False
+
+        bush = await self.get_store_bush(
+            store
+        )
+
+        if bush is None:
+            return None, False
+
+        topic_id = getattr(
+            bush,
+            "telegram_topic_id",
+            None,
+        )
+
+        if topic_id is None:
+            return None, False
+
+        group_id = network_group.chat_id
 
         notification_type = (
             NotificationType.CLOSING_SUMMARY
@@ -786,12 +798,8 @@ class ClosingService:
                 ),
                 store_id=store.id,
                 bush_id=store.bush_id,
-                chat_id=(
-                    destination.chat_id
-                ),
-                topic_id=(
-                    destination.message_thread_id
-                ),
+                chat_id=group_id,
+                topic_id=topic_id,
                 suffix="closing-report-group",
                 scheduled_for=queued_at,
                 message_text=message_text,
@@ -820,15 +828,10 @@ class ClosingService:
                     ),
                     "caption": message_text,
                     "parse_mode": "HTML",
-                    "routing_scope": (
-                        destination.scope.value
-                    ),
-                    "routing_topic": (
-                        destination.topic.value
-                    ),
-                    "routing_bush_id": (
-                        destination.bush_id
-                    ),
+                    "routing_scope": "bush_topic",
+                    "routing_topic": "closing",
+                    "routing_bush_id": store.bush_id,
+                    "routing_thread_id": topic_id,
                 },
             )
         )
