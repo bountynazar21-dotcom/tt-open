@@ -19,3 +19,9 @@ storage/imports/*
 storage/temp/*
 !storage/temp/.gitkeep
 *.egg-info/
+.patch_backups/
+*.bak-*
+*_dump.txt
+*_inspect.txt
+*_inspection.txt
+*_core.txt
