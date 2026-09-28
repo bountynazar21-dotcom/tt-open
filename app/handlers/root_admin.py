@@ -1742,6 +1742,38 @@ async def director_bushes_callback(
     Список кущів.
     """
 
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
+
     await callback.answer()
 
     bushes = await query_network_bushes(
@@ -1818,6 +1850,38 @@ async def director_stores_callback(
     """
     Усі ТТ.
     """
+
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
 
     await callback.answer()
 
@@ -1913,6 +1977,38 @@ async def director_users_callback(
     Користувачі мережі.
     """
 
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
+
     await callback.answer()
 
     users = await query_network_users(
@@ -1984,6 +2080,38 @@ async def director_opening_callback(
     """
     Live відкриття мережі.
     """
+
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
 
     await callback.answer()
 
@@ -2122,6 +2250,38 @@ async def director_late_callback(
     Усі запізнення мережі.
     """
 
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
+
     await callback.answer()
 
     user = get_database_user(
@@ -2240,6 +2400,38 @@ async def director_missing_opening_callback(
     ТТ без відкриття.
     """
 
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
+
     await callback.answer()
 
     user = get_database_user(
@@ -2333,6 +2525,38 @@ async def director_closing_callback(
     """
     Live закриття мережі.
     """
+
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
 
     await callback.answer()
 
@@ -2464,6 +2688,38 @@ async def director_missing_closing_callback(
     Відкриті сьогодні ТТ,
     які не завершили закриття.
     """
+
+    user = get_database_user(
+        data
+    )
+
+    role = getattr(
+        user,
+        "role",
+        None,
+    )
+
+    role_name = (
+        getattr(role, "name", None)
+        or getattr(role, "value", None)
+        or str(role or "")
+    )
+
+    if str(role_name).upper() == "DIRECTOR":
+        await callback.answer(
+            "\u26d4 \u0426\u044f \u0444\u0443\u043d\u043a\u0446\u0456\u044f "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0443.",
+            show_alert=True,
+        )
+
+        await show_dashboard_callback(
+            callback,
+            user=user,
+            data=data,
+        )
+
+        return
 
     await callback.answer()
 
