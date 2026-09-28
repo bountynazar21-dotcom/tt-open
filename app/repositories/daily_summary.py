@@ -318,13 +318,12 @@ class DailySummaryRepository(
             initial_text
         )
 
-        summary = DailySummaryMessage(
+        summary = DailySummaryMessage.create_pending(
             summary_type=summary_type,
             business_date=business_date,
             bush_id=bush_id,
             chat_id=chat_id,
             topic_id=topic_id,
-            message_id=None,
         )
 
         content_hash = (
