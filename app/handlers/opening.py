@@ -862,6 +862,7 @@ def result_checkin_time(
 ) -> Any:
     return first_attr(
         result,
+        "actual_open_time",
         "checked_in_at",
         "checkin_at",
         "opened_at",
@@ -875,6 +876,7 @@ def result_expected_time(
 ) -> Any:
     return first_attr(
         result,
+        "scheduled_open_time",
         "expected_time",
         "scheduled_time",
         "opening_time",
