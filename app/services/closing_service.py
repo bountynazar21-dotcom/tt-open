@@ -758,12 +758,7 @@ class ClosingService:
             return None, False
 
         notification_type = (
-            self.resolve_notification_type(
-                "closing_report",
-                "closing_submitted",
-                "closing_report_submitted",
-                "store_closed",
-            )
+            NotificationType.CLOSING_SUMMARY
         )
 
         message_text = (
