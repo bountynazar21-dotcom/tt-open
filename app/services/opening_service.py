@@ -1016,21 +1016,22 @@ class OpeningService:
         self,
         store: Store,
     ) -> list[User]:
-        """Повертає отримувачів ранкового сповіщення."""
+        """
+        ?????????? ?????????? ??? ?????????? ??.
+
+        ?????????:
+        - ROOT_ADMIN ?? ???? ??????;
+        - BUSH_ADMIN ????? ????;
+        - LION ????? ????.
+
+        ?? ?????????:
+        - DIRECTOR;
+        - ?????????? ??.
+        """
 
         recipients: dict[int, User] = {}
 
-        store_users = (
-            await self.repositories.bindings
-            .get_users_for_store(
-                store.id,
-                active_only=True,
-            )
-        )
-
-        for user in store_users:
-            recipients[user.id] = user
-
+        # ????? ???? + ???? ???? ????? ????.
         if store.bush_id is not None:
             bush_users = (
                 await self.repositories.bindings
@@ -1041,33 +1042,37 @@ class OpeningService:
             )
 
             for user in bush_users:
+                if user.role not in {
+                    UserRole.BUSH_ADMIN,
+                    UserRole.LION,
+                }:
+                    continue
+
                 recipients[user.id] = user
 
-        global_statement = (
+        # ROOT_ADMIN ?????? ???????? ????? ??????.
+        statement = (
             select(User)
             .where(
-                User.role.in_(
-                    {
-                        UserRole.ROOT_ADMIN,
-                        UserRole.DIRECTOR,
-                    }
-                ),
+                User.role == UserRole.ROOT_ADMIN,
                 User.status == UserStatus.ACTIVE,
                 User.is_blocked.is_(False),
             )
-            .order_by(User.id.asc())
-        )
-
-        global_result = (
-            await self.session.scalars(
-                global_statement
+            .order_by(
+                User.id.asc()
             )
         )
 
-        for user in global_result.unique().all():
+        result = await self.session.scalars(
+            statement
+        )
+
+        for user in result.unique().all():
             recipients[user.id] = user
 
-        return list(recipients.values())
+        return list(
+            recipients.values()
+        )
 
     # ==========================================
     # ЖИВІ ПІДСУМКИ

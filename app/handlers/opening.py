@@ -1034,8 +1034,53 @@ async def get_opening_status(
     data: dict[str, Any],
 ) -> Any | None:
     """
-    Поточний статус відкриття ТТ.
+    ???????? ?????? ????????? ??.
     """
+
+    today = now_local().date()
+
+    # -----------------------------------------------------
+    # PRIMARY: OpeningRepository
+    # -----------------------------------------------------
+
+    repositories = data.get(
+        "repositories"
+    )
+
+    if repositories is not None:
+        repository = getattr(
+            repositories,
+            "openings",
+            None,
+        )
+
+        getter = getattr(
+            repository,
+            "get_by_store_date",
+            None,
+        )
+
+        if callable(getter):
+            try:
+                return await call_method(
+                    getter,
+                    {
+                        "store_id": store_id,
+                        "business_date": today,
+                    },
+                )
+
+            except Exception:
+                logger.exception(
+                    "OpeningRepository status lookup failed: "
+                    "store_id=%s date=%s",
+                    store_id,
+                    today,
+                )
+
+    # -----------------------------------------------------
+    # COMPATIBILITY: OpeningService
+    # -----------------------------------------------------
 
     service = get_opening_service(
         data
@@ -1043,8 +1088,6 @@ async def get_opening_status(
 
     if service is None:
         return None
-
-    today = now_local().date()
 
     payload = {
         "store_id": store_id,
@@ -1060,6 +1103,7 @@ async def get_opening_status(
         if user is not None
         else None,
 
+        "business_date": today,
         "date": today,
         "work_date": today,
         "target_date": today,
@@ -1080,9 +1124,7 @@ async def get_opening_status(
             None,
         )
 
-        if not callable(
-            method
-        ):
+        if not callable(method):
             continue
 
         try:
