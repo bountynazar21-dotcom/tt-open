@@ -1493,6 +1493,29 @@ def director_reports_keyboard(
         ]
     )
 
+
+def director_report_result_keyboard(
+    *,
+    action: DirectorAction,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                director_button(
+                    text="\U0001f4e5 \u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 Excel",
+                    action=action,
+                    ref_id=1,
+                )
+            ],
+            [
+                director_button(
+                    text="\U0001f519 \u0414\u043e \u043c\u0435\u043d\u044e",
+                    action=DirectorAction.MENU,
+                )
+            ],
+        ]
+    )
+
 # =========================================================
 # INVITES
 # =========================================================

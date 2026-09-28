@@ -75,6 +75,7 @@ from app.keyboards.director import (
     director_no_stores_keyboard,
     director_opening_keyboard,
     director_reports_keyboard,
+    director_report_result_keyboard,
     director_stores_keyboard,
     director_users_keyboard,
 )
@@ -2853,10 +2854,13 @@ def build_director_period_report_text(
         return (
             f"{title}\n\n"
             "\u26a0\ufe0f "
-            "\u0414\u0430\u043d\u0456 "
-            "\u0437\u0432\u0456\u0442\u0443 "
-            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0456."
+            "\u041d\u0435\u043c\u0430\u0454 "
+            "\u0434\u0430\u043d\u0438\u0445 "
+            "\u0434\u043b\u044f "
+            "\u0437\u0432\u0456\u0442\u0443."
         )
+
+    loss_per_minute = 8
 
     business_date = getattr(
         result,
@@ -2882,17 +2886,36 @@ def build_director_period_report_text(
                 "%d.%m.%Y"
             )
         )
+
     elif (
         date_from is not None
         and date_to is not None
     ):
         period_text = (
             f"{date_from:%d.%m.%Y}"
-            f" \u2014 "
+            " \u2014 "
             f"{date_to:%d.%m.%Y}"
         )
+
     else:
         period_text = "\u2014"
+
+    total_minutes = max(
+        int(
+            getattr(
+                totals,
+                "total_lateness_minutes",
+                0,
+            )
+            or 0
+        ),
+        0,
+    )
+
+    total_loss = (
+        total_minutes
+        * loss_per_minute
+    )
 
     cash = (
         format_director_report_money(
@@ -2904,59 +2927,549 @@ def build_director_period_report_text(
         )
     )
 
-    return (
-        f"{title}\n\n"
-        f"\U0001f4c5 "
-        f"<b>{period_text}</b>\n"
-        f"\U0001f3ea "
-        f"\u0422\u0422: "
-        f"<b>{getattr(totals, 'store_count', 0)}</b>\n\n"
-
-        f"\U0001f305 "
-        f"<b>\u0412\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f</b>\n"
-        f"\u2705 "
-        f"\u0412\u0456\u0434\u043a\u0440\u0438\u043b\u0438\u0441\u044c: "
-        f"<b>{getattr(totals, 'opened_count', 0)}/"
-        f"{getattr(totals, 'opening_expected_count', 0)}</b>\n"
-        f"\U0001f7e2 "
-        f"\u0412\u0447\u0430\u0441\u043d\u043e: "
-        f"<b>{getattr(totals, 'opened_on_time_count', 0)}</b>\n"
-        f"\u26a0\ufe0f "
-        f"\u0406\u0437 "
-        f"\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c: "
-        f"<b>{getattr(totals, 'opened_late_count', 0)}</b>\n"
-        f"\U0001f6a8 "
-        f"\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: "
-        f"<b>{getattr(totals, 'opening_missed_count', 0)}</b>\n"
-        f"\u23f3 "
-        f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c: "
-        f"<b>{getattr(totals, 'opening_waiting_count', 0)}</b>\n\n"
-
-        f"\U0001f319 "
-        f"<b>\u0417\u0430\u043a\u0440\u0438\u0442\u0442\u044f</b>\n"
-        f"\u2705 "
-        f"\u041f\u043e\u0434\u0430\u043d\u043e: "
-        f"<b>{getattr(totals, 'closing_submitted_count', 0)}/"
-        f"{getattr(totals, 'closing_expected_count', 0)}</b>\n"
-        f"\U0001f7e2 "
-        f"\u0412\u0447\u0430\u0441\u043d\u043e: "
-        f"<b>{getattr(totals, 'closing_on_time_count', 0)}</b>\n"
-        f"\u26a0\ufe0f "
-        f"\u0406\u0437 "
-        f"\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c: "
-        f"<b>{getattr(totals, 'closing_late_count', 0)}</b>\n"
-        f"\U0001f6a8 "
-        f"\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: "
-        f"<b>{getattr(totals, 'closing_missed_count', 0)}</b>\n"
-        f"\u23f3 "
-        f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c: "
-        f"<b>{getattr(totals, 'closing_waiting_count', 0)}</b>\n\n"
-
-        f"\U0001f4b0 "
-        f"<b>\u041a\u0430\u0441\u0430: "
-        f"{cash} \u0433\u0440\u043d</b>"
+    average_lateness = getattr(
+        totals,
+        "average_lateness_minutes",
+        0,
     )
 
+    lines = [
+        title,
+        "",
+        (
+            "\U0001f4c5 "
+            f"<b>{period_text}</b>"
+        ),
+        (
+            "\U0001f3ea "
+            "\u0422\u0422: "
+            f"<b>{getattr(totals, 'store_count', 0)}</b>"
+        ),
+        "",
+        "\U0001f305 <b>\u0412\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f</b>",
+        (
+            "\u2705 "
+            "\u0412\u0456\u0434\u043a\u0440\u0438\u043b\u0438\u0441\u044c: "
+            f"<b>{getattr(totals, 'opened_count', 0)}/"
+            f"{getattr(totals, 'opening_expected_count', 0)}</b>"
+        ),
+        (
+            "\U0001f7e2 "
+            "\u0412\u0447\u0430\u0441\u043d\u043e: "
+            f"<b>{getattr(totals, 'opened_on_time_count', 0)}</b>"
+        ),
+        (
+            "\u26a0\ufe0f "
+            "\u0406\u0437 \u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c: "
+            f"<b>{getattr(totals, 'opened_late_count', 0)}</b>"
+        ),
+        (
+            "\U0001f6a8 "
+            "\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: "
+            f"<b>{getattr(totals, 'opening_missed_count', 0)}</b>"
+        ),
+        (
+            "\u23f1 "
+            "\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0435 "
+            "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f: "
+            f"<b>{total_minutes} \u0445\u0432</b>"
+        ),
+        (
+            "\U0001f4ca "
+            "\u0421\u0435\u0440\u0435\u0434\u043d\u0454 "
+            "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f: "
+            f"<b>{average_lateness} \u0445\u0432</b>"
+        ),
+        (
+            "\U0001f4b8 "
+            "\u0420\u043e\u0437\u0440\u0430\u0445\u0443\u043d\u043a\u043e\u0432\u0456 "
+            "\u0432\u0442\u0440\u0430\u0442\u0438: "
+            f"<b>{total_loss:,} \u0433\u0440\u043d</b>"
+        ).replace(",", " "),
+        (
+            "\U0001f9ee "
+            "<i>8 \u0433\u0440\u043d \u00d7 "
+            "\u043a\u043e\u0436\u043d\u0430 "
+            "\u0445\u0432\u0438\u043b\u0438\u043d\u0430 "
+            "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f "
+            "\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f</i>"
+        ),
+        "",
+        "\U0001f319 <b>\u0417\u0430\u043a\u0440\u0438\u0442\u0442\u044f</b>",
+        (
+            "\u2705 "
+            "\u041f\u043e\u0434\u0430\u043d\u043e: "
+            f"<b>{getattr(totals, 'closing_submitted_count', 0)}/"
+            f"{getattr(totals, 'closing_expected_count', 0)}</b>"
+        ),
+        (
+            "\U0001f7e2 "
+            "\u0412\u0447\u0430\u0441\u043d\u043e: "
+            f"<b>{getattr(totals, 'closing_on_time_count', 0)}</b>"
+        ),
+        (
+            "\u26a0\ufe0f "
+            "\u0406\u0437 \u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c: "
+            f"<b>{getattr(totals, 'closing_late_count', 0)}</b>"
+        ),
+        (
+            "\U0001f6a8 "
+            "\u041d\u0435 \u043f\u043e\u0434\u0430\u043d\u043e: "
+            f"<b>{getattr(totals, 'closing_missed_count', 0)}</b>"
+        ),
+        "",
+        (
+            "\U0001f4b0 "
+            "<b>\u041a\u0430\u0441\u0430: "
+            f"{cash} \u0433\u0440\u043d</b>"
+        ),
+    ]
+
+    # -----------------------------------------------------
+    # DAILY
+    # -----------------------------------------------------
+
+    daily_rows = tuple(
+        getattr(
+            result,
+            "rows",
+            (),
+        )
+        or ()
+    )
+
+    if daily_rows:
+        late_rows = sorted(
+            (
+                row
+                for row in daily_rows
+                if (
+                    int(
+                        getattr(
+                            row,
+                            "opening_lateness_minutes",
+                            0,
+                        )
+                        or 0
+                    )
+                    > 0
+                )
+            ),
+            key=lambda row: int(
+                getattr(
+                    row,
+                    "opening_lateness_minutes",
+                    0,
+                )
+                or 0
+            ),
+            reverse=True,
+        )
+
+        if late_rows:
+            lines.extend(
+                [
+                    "",
+                    "\u26a0\ufe0f <b>\u0422\u0422 \u0456\u0437 "
+                    "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c</b>",
+                ]
+            )
+
+            for row in late_rows[:20]:
+                minutes = max(
+                    int(
+                        getattr(
+                            row,
+                            "opening_lateness_minutes",
+                            0,
+                        )
+                        or 0
+                    ),
+                    0,
+                )
+
+                loss = (
+                    minutes
+                    * loss_per_minute
+                )
+
+                code = escape(
+                    str(
+                        getattr(
+                            row,
+                            "store_code",
+                            "\u0422\u0422",
+                        )
+                    )
+                )
+
+                loss_text = (
+                    f"{loss:,}"
+                    .replace(",", " ")
+                )
+
+                lines.append(
+                    f"\u2022 <b>{code}</b> "
+                    f"\u2014 +{minutes} \u0445\u0432 "
+                    f"\u2192 <b>{loss_text} \u0433\u0440\u043d</b>"
+                )
+
+            if len(late_rows) > 20:
+                lines.append(
+                    "\u2026 \u0449\u0435 "
+                    f"{len(late_rows) - 20} "
+                    "\u0422\u0422"
+                )
+
+        missed_rows = [
+            row
+            for row in daily_rows
+            if bool(
+                getattr(
+                    row,
+                    "opening_deadline_missed",
+                    False,
+                )
+            )
+        ]
+
+        if missed_rows:
+            codes = ", ".join(
+                escape(
+                    str(
+                        getattr(
+                            row,
+                            "store_code",
+                            "\u0422\u0422",
+                        )
+                    )
+                )
+                for row in missed_rows[:20]
+            )
+
+            lines.extend(
+                [
+                    "",
+                    "\U0001f6a8 <b>\u041d\u0435 "
+                    "\u0432\u0456\u0434\u043a\u0440\u0438\u043b\u0438\u0441\u044c "
+                    "\u0434\u043e \u0434\u0435\u0434\u043b\u0430\u0439\u043d\u0443:</b>",
+                    codes,
+                ]
+            )
+
+        closing_rows = [
+            row
+            for row in daily_rows
+            if (
+                bool(
+                    getattr(
+                        row,
+                        "closing_late",
+                        False,
+                    )
+                )
+                or bool(
+                    getattr(
+                        row,
+                        "closing_deadline_missed",
+                        False,
+                    )
+                )
+            )
+        ]
+
+        if closing_rows:
+            lines.extend(
+                [
+                    "",
+                    "\U0001f319 <b>\u041f\u0440\u043e\u0431\u043b\u0435\u043c\u0438 "
+                    "\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f</b>",
+                ]
+            )
+
+            for row in closing_rows[:15]:
+                code = escape(
+                    str(
+                        getattr(
+                            row,
+                            "store_code",
+                            "\u0422\u0422",
+                        )
+                    )
+                )
+
+                if bool(
+                    getattr(
+                        row,
+                        "closing_deadline_missed",
+                        False,
+                    )
+                ):
+                    status = (
+                        "\u043d\u0435 "
+                        "\u043f\u043e\u0434\u0430\u043d\u043e "
+                        "\u0437\u0432\u0456\u0442"
+                    )
+                else:
+                    status = (
+                        "\u0437\u0432\u0456\u0442 "
+                        "\u0456\u0437 "
+                        "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c"
+                    )
+
+                lines.append(
+                    f"\u2022 <b>{code}</b> "
+                    f"\u2014 {status}"
+                )
+
+    # -----------------------------------------------------
+    # WEEK / MONTH
+    # -----------------------------------------------------
+
+    stores = tuple(
+        getattr(
+            result,
+            "stores",
+            (),
+        )
+        or ()
+    )
+
+    if stores:
+        late_stores = sorted(
+            (
+                item
+                for item in stores
+                if (
+                    int(
+                        getattr(
+                            item,
+                            "total_lateness_minutes",
+                            0,
+                        )
+                        or 0
+                    )
+                    > 0
+                )
+            ),
+            key=lambda item: int(
+                getattr(
+                    item,
+                    "total_lateness_minutes",
+                    0,
+                )
+                or 0
+            ),
+            reverse=True,
+        )
+
+        if late_stores:
+            lines.extend(
+                [
+                    "",
+                    "\u26a0\ufe0f <b>\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 "
+                    "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u044c "
+                    "\u043f\u043e \u0422\u0422</b>",
+                ]
+            )
+
+            for item in late_stores[:20]:
+                minutes = max(
+                    int(
+                        getattr(
+                            item,
+                            "total_lateness_minutes",
+                            0,
+                        )
+                        or 0
+                    ),
+                    0,
+                )
+
+                days = max(
+                    int(
+                        getattr(
+                            item,
+                            "opened_late_days",
+                            0,
+                        )
+                        or 0
+                    ),
+                    0,
+                )
+
+                loss = (
+                    minutes
+                    * loss_per_minute
+                )
+
+                loss_text = (
+                    f"{loss:,}"
+                    .replace(",", " ")
+                )
+
+                code = escape(
+                    str(
+                        getattr(
+                            item,
+                            "store_code",
+                            "\u0422\u0422",
+                        )
+                    )
+                )
+
+                lines.append(
+                    f"\u2022 <b>{code}</b> "
+                    f"\u2014 {days} "
+                    "\u0440\u0430\u0437., "
+                    f"{minutes} \u0445\u0432 "
+                    f"\u2192 <b>{loss_text} \u0433\u0440\u043d</b>"
+                )
+
+            if len(late_stores) > 20:
+                lines.append(
+                    "\u2026 \u0449\u0435 "
+                    f"{len(late_stores) - 20} "
+                    "\u0422\u0422"
+                )
+
+        missed_stores = [
+            item
+            for item in stores
+            if (
+                int(
+                    getattr(
+                        item,
+                        "opening_missed_days",
+                        0,
+                    )
+                    or 0
+                )
+                > 0
+            )
+        ]
+
+        if missed_stores:
+            lines.extend(
+                [
+                    "",
+                    "\U0001f6a8 <b>\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u0456 "
+                    "\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f</b>",
+                ]
+            )
+
+            for item in missed_stores[:15]:
+                code = escape(
+                    str(
+                        getattr(
+                            item,
+                            "store_code",
+                            "\u0422\u0422",
+                        )
+                    )
+                )
+
+                count = int(
+                    getattr(
+                        item,
+                        "opening_missed_days",
+                        0,
+                    )
+                    or 0
+                )
+
+                lines.append(
+                    f"\u2022 <b>{code}</b> "
+                    f"\u2014 {count}"
+                )
+
+        closing_stores = [
+            item
+            for item in stores
+            if (
+                int(
+                    getattr(
+                        item,
+                        "closing_late_days",
+                        0,
+                    )
+                    or 0
+                )
+                > 0
+                or int(
+                    getattr(
+                        item,
+                        "closing_missed_days",
+                        0,
+                    )
+                    or 0
+                )
+                > 0
+            )
+        ]
+
+        if closing_stores:
+            lines.extend(
+                [
+                    "",
+                    "\U0001f319 <b>\u041f\u0440\u043e\u0431\u043b\u0435\u043c\u0438 "
+                    "\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f "
+                    "\u043f\u043e \u0422\u0422</b>",
+                ]
+            )
+
+            for item in closing_stores[:15]:
+                code = escape(
+                    str(
+                        getattr(
+                            item,
+                            "store_code",
+                            "\u0422\u0422",
+                        )
+                    )
+                )
+
+                late_count = int(
+                    getattr(
+                        item,
+                        "closing_late_days",
+                        0,
+                    )
+                    or 0
+                )
+
+                missed_count = int(
+                    getattr(
+                        item,
+                        "closing_missed_days",
+                        0,
+                    )
+                    or 0
+                )
+
+                parts = []
+
+                if late_count:
+                    parts.append(
+                        "\u0456\u0437 "
+                        "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c "
+                        f"{late_count}"
+                    )
+
+                if missed_count:
+                    parts.append(
+                        "\u043d\u0435 "
+                        "\u043f\u043e\u0434\u0430\u043d\u043e "
+                        f"{missed_count}"
+                    )
+
+                lines.append(
+                    f"\u2022 <b>{code}</b> "
+                    "\u2014 "
+                    + ", ".join(parts)
+                )
+
+    return "\n".join(lines)
 
 @router.callback_query(
     DirectorCallback.filter(
@@ -2989,16 +3502,19 @@ async def director_period_report_callback(
         return
 
     message = callback.message
+
     chat = getattr(
         message,
         "chat",
         None,
     )
+
     chat_type = getattr(
         chat,
         "type",
         None,
     )
+
     chat_type = getattr(
         chat_type,
         "value",
@@ -3031,12 +3547,124 @@ async def director_period_report_callback(
         )
         return
 
+    today = today_local()
+
+    # =====================================================
+    # XLSX
+    # =====================================================
+
+    if callback_data.ref_id == 1:
+        excel_service = get_service(
+            data,
+            "excel",
+        )
+
+        if excel_service is None:
+            await callback.answer(
+                "Excel service unavailable.",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer(
+            "\u0424\u043e\u0440\u043c\u0443\u044e Excel\u2026"
+        )
+
+        try:
+            if (
+                callback_data.action
+                == DirectorAction.REPORT_DAILY
+            ):
+                report_data = (
+                    await service.prepare_daily_excel(
+                        user=user,
+                        business_date=today,
+                    )
+                )
+
+                caption = (
+                    "\U0001f4ca "
+                    "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
+                    "Excel \u0437\u0430 "
+                    "\u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456"
+                )
+
+            elif (
+                callback_data.action
+                == DirectorAction.REPORT_WEEKLY
+            ):
+                report_data = (
+                    await service.prepare_weekly_excel(
+                        user=user,
+                        reference_date=today,
+                    )
+                )
+
+                caption = (
+                    "\U0001f4c5 "
+                    "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
+                    "Excel \u0437\u0430 "
+                    "\u0442\u0438\u0436\u0434\u0435\u043d\u044c"
+                )
+
+            else:
+                report_data = (
+                    await service.prepare_monthly_excel(
+                        user=user,
+                        year=today.year,
+                        month=today.month,
+                    )
+                )
+
+                caption = (
+                    "\U0001f5d3\ufe0f "
+                    "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
+                    "Excel \u0437\u0430 "
+                    "\u043c\u0456\u0441\u044f\u0446\u044c"
+                )
+
+            document = (
+                excel_service
+                .generate_telegram_file(
+                    report_data
+                )
+            )
+
+            await message.answer_document(
+                document=document,
+                caption=(
+                    caption
+                    + "\n"
+                    + "\U0001f4b8 "
+                    + "8 \u0433\u0440\u043d "
+                    + "\u0437\u0430 1 \u0445\u0432 "
+                    + "\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f "
+                    + "\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f."
+                ),
+            )
+
+        except Exception:
+            logger.exception(
+                "Director Excel generation failed"
+            )
+
+            await message.answer(
+                "\u274c "
+                "\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+                "\u0441\u0444\u043e\u0440\u043c\u0443\u0432\u0430\u0442\u0438 "
+                "Excel."
+            )
+
+        return
+
+    # =====================================================
+    # TELEGRAM
+    # =====================================================
+
     await callback.answer(
         "\u0424\u043e\u0440\u043c\u0443\u044e "
         "\u0437\u0432\u0456\u0442\u2026"
     )
-
-    today = today_local()
 
     try:
         if (
@@ -3119,10 +3747,10 @@ async def director_period_report_callback(
             )
         ),
         reply_markup=build_keyboard(
-            director_main_keyboard
+            director_report_result_keyboard,
+            action=callback_data.action,
         ),
     )
-
 
 @router.callback_query(
     DirectorCallback.filter(

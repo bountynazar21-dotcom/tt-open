@@ -520,11 +520,11 @@ class ExcelService:
 
         if "загальне" in source_header:
             penalty_header = (
-                "Штраф за запізнення, грн"
+                "Розрахункові втрати, грн"
             )
 
         else:
-            penalty_header = "Штраф, грн"
+            penalty_header = "Втрати, грн"
 
         insert_index = source_index + 1
 
@@ -616,7 +616,7 @@ class ExcelService:
             result.append(
                 [
                     (
-                        "Штраф за запізнення, грн"
+                        "Розрахункові втрати, грн"
                     ),
                     penalty,
                 ]
@@ -1010,7 +1010,13 @@ class ExcelService:
                 cell
             )
 
-        if "штраф" in normalized_header:
+        if (
+
+            "штраф" in normalized_header
+
+            or "втрат" in normalized_header
+
+        ):
             self.style_penalty_cell(
                 cell
             )
@@ -1052,6 +1058,7 @@ class ExcelService:
         if (
             "каса" in header
             or "штраф" in header
+            or "втрат" in header
         ):
             cell.number_format = (
                 '#,##0.00 "грн"'
@@ -1318,7 +1325,13 @@ class ExcelService:
                     ),
                 )
 
-            if "штраф" in normalized_header:
+            if (
+
+                "штраф" in normalized_header
+
+                or "втрат" in normalized_header
+
+            ):
                 worksheet.conditional_formatting.add(
                     cell_range,
                     CellIsRule(
@@ -1536,6 +1549,7 @@ class ExcelService:
             "%",
             "каса",
             "штраф",
+            "втрат",
             "фото",
             "подано",
             "відкриття",
