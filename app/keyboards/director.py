@@ -395,181 +395,48 @@ def store_button_text(
 
 def director_main_keyboard(
     *,
-    state: DirectorDashboardState,
+    state: DirectorDashboardState | None = None,
 ) -> InlineKeyboardMarkup:
-    """
-    Головний dashboard директора.
-    """
-
-    rows: list[
-        list[InlineKeyboardButton]
-    ] = []
-
-    # -----------------------------------------------------
-    # OPENING
-    # -----------------------------------------------------
-
-    rows.append(
-        [
-            director_button(
-                text=(
-                    "🌅 Відкриття "
-                    f"{state.opened_count}/"
-                    f"{state.active_stores}"
-                ),
-                action=DirectorAction.OPENING,
-            )
-        ]
-    )
-
-    if state.late_count > 0:
-        rows.append(
-            [
-                director_button(
-                    text=(
-                        "⚠️ Запізнилися: "
-                        f"{state.late_count}"
-                    ),
-                    action=DirectorAction.LATE,
-                )
-            ]
-        )
-
-    if state.missing_opening_count > 0:
-        rows.append(
-            [
-                director_button(
-                    text=(
-                        "🚨 Не відкрилися: "
-                        f"{state.missing_opening_count}"
-                    ),
-                    action=(
-                        DirectorAction
-                        .MISSING_OPENING
-                    ),
-                )
-            ]
-        )
-
-    # -----------------------------------------------------
-    # CLOSING
-    # -----------------------------------------------------
-
-    rows.append(
-        [
-            director_button(
-                text=(
-                    "🌙 Закриття "
-                    f"{state.closed_count}/"
-                    f"{state.active_stores}"
-                ),
-                action=DirectorAction.CLOSING,
-            )
-        ]
-    )
-
-    if state.missing_closing_count > 0:
-        rows.append(
-            [
-                director_button(
-                    text=(
-                        "🚨 Не закрилися: "
-                        f"{state.missing_closing_count}"
-                    ),
-                    action=(
-                        DirectorAction
-                        .MISSING_CLOSING
-                    ),
-                )
-            ]
-        )
-
-    # -----------------------------------------------------
-    # NETWORK
-    # -----------------------------------------------------
-
-    rows.append(
-        [
-            director_button(
-                text=(
-                    "🌿 Кущі "
-                    f"({state.bushes_count})"
-                ),
-                action=DirectorAction.BUSHES,
-            ),
-            director_button(
-                text=(
-                    "🏪 ТТ "
-                    f"({state.active_stores})"
-                ),
-                action=DirectorAction.STORES,
-            ),
-        ]
-    )
-
-    rows.append(
-        [
-            director_button(
-                text=(
-                    "👥 Користувачі "
-                    f"({state.users_count})"
-                ),
-                action=DirectorAction.USERS,
-            )
-        ]
-    )
-
-    # -----------------------------------------------------
-    # REPORTS
-    # -----------------------------------------------------
-
-    rows.append(
-        [
-            director_button(
-                text="📊 Звіти мережі",
-                action=DirectorAction.REPORTS,
-            ),
-            director_button(
-                text="🔗 Запрошення",
-                action=DirectorAction.INVITES,
-            ),
-        ]
-    )
-
-    # -----------------------------------------------------
-    # REFRESH
-    # -----------------------------------------------------
-
-    rows.append(
-        [
-            director_button(
-                text="🔄 Оновити",
-                action=DirectorAction.REFRESH,
-            )
-        ]
-    )
-
-    rows.append(
-        [
-            inline_button(
-                text="👤 Мій профіль",
-                callback=MainMenuCallback(
-                    action=MainMenuAction.PROFILE
-                ),
-            ),
-            inline_button(
-                text="ℹ️ Допомога",
-                callback=MainMenuCallback(
-                    action=MainMenuAction.HELP
-                ),
-            ),
-        ]
-    )
-
     return InlineKeyboardMarkup(
-        inline_keyboard=rows
+        inline_keyboard=[
+            [
+                inline_button(
+                    text="\U0001f4ca \u0417\u0432\u0456\u0442 \u0437\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456",
+                    callback=ReportCallback(
+                        action=ReportAction.DAILY,
+                        ref_id=0,
+                        page=0,
+                    ),
+                )
+            ],
+            [
+                inline_button(
+                    text="\U0001f4c5 \u0417\u0432\u0456\u0442 \u0437\u0430 \u0442\u0438\u0436\u0434\u0435\u043d\u044c",
+                    callback=ReportCallback(
+                        action=ReportAction.WEEKLY,
+                        ref_id=0,
+                        page=0,
+                    ),
+                )
+            ],
+            [
+                inline_button(
+                    text="\U0001f5d3\ufe0f \u0417\u0432\u0456\u0442 \u0437\u0430 \u043c\u0456\u0441\u044f\u0446\u044c",
+                    callback=ReportCallback(
+                        action=ReportAction.MONTHLY,
+                        ref_id=0,
+                        page=0,
+                    ),
+                )
+            ],
+            [
+                director_button(
+                    text="\u2795 \u0417\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0438 \u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430",
+                    action=DirectorAction.INVITES,
+                )
+            ],
+        ]
     )
-
 
 # =========================================================
 # BUSHES
@@ -1602,15 +1469,11 @@ def director_user_keyboard(
 
 def director_reports_keyboard(
 ) -> InlineKeyboardMarkup:
-    """
-    Звіти всієї мережі.
-    """
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 inline_button(
-                    text="📅 Сьогодні",
+                    text="\U0001f4ca \u0421\u044c\u043e\u0433\u043e\u0434\u043d\u0456",
                     callback=ReportCallback(
                         action=ReportAction.DAILY,
                         ref_id=0,
@@ -1620,7 +1483,7 @@ def director_reports_keyboard(
             ],
             [
                 inline_button(
-                    text="📆 Тиждень",
+                    text="\U0001f4c5 \u0422\u0438\u0436\u0434\u0435\u043d\u044c",
                     callback=ReportCallback(
                         action=ReportAction.WEEKLY,
                         ref_id=0,
@@ -1628,7 +1491,7 @@ def director_reports_keyboard(
                     ),
                 ),
                 inline_button(
-                    text="🗓 Місяць",
+                    text="\U0001f5d3\ufe0f \u041c\u0456\u0441\u044f\u0446\u044c",
                     callback=ReportCallback(
                         action=ReportAction.MONTHLY,
                         ref_id=0,
@@ -1637,52 +1500,13 @@ def director_reports_keyboard(
                 ),
             ],
             [
-                inline_button(
-                    text="🌐 Вся мережа",
-                    callback=ReportCallback(
-                        action=ReportAction.NETWORK,
-                        ref_id=0,
-                        page=0,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="🌿 Обрати кущ",
-                    callback=ReportCallback(
-                        action=ReportAction.BUSH,
-                        ref_id=0,
-                        page=0,
-                    ),
-                ),
-                inline_button(
-                    text="🏪 Обрати ТТ",
-                    callback=ReportCallback(
-                        action=ReportAction.STORE,
-                        ref_id=0,
-                        page=0,
-                    ),
-                ),
-            ],
-            [
-                inline_button(
-                    text="📥 Excel",
-                    callback=ReportCallback(
-                        action=ReportAction.EXCEL,
-                        ref_id=0,
-                        page=0,
-                    ),
-                )
-            ],
-            [
                 director_button(
-                    text="🔙 Назад",
+                    text="\U0001f519 \u041d\u0430\u0437\u0430\u0434",
                     action=DirectorAction.MENU,
                 )
             ],
         ]
     )
-
 
 # =========================================================
 # INVITES
@@ -1691,25 +1515,11 @@ def director_reports_keyboard(
 
 def director_invites_keyboard(
 ) -> InlineKeyboardMarkup:
-    """
-    Запрошення для мережі.
-    """
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 inline_button(
-                    text="🏪 Для ТТ",
-                    callback=InviteCallback(
-                        action=InviteAction.STORE,
-                        target_id=0,
-                        invite_id=0,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="🌿 Для куща",
+                    text="\u2795 \u0417\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0438 \u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430",
                     callback=InviteCallback(
                         action=InviteAction.BUSH,
                         target_id=0,
@@ -1718,34 +1528,13 @@ def director_invites_keyboard(
                 )
             ],
             [
-                inline_button(
-                    text="🏢 Для директора",
-                    callback=InviteCallback(
-                        action=InviteAction.DIRECTOR,
-                        target_id=0,
-                        invite_id=0,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="📋 Активні запрошення",
-                    callback=InviteCallback(
-                        action=InviteAction.LIST,
-                        target_id=0,
-                        invite_id=0,
-                    ),
-                )
-            ],
-            [
                 director_button(
-                    text="🔙 Назад",
+                    text="\U0001f519 \u041d\u0430\u0437\u0430\u0434",
                     action=DirectorAction.MENU,
                 )
             ],
         ]
     )
-
 
 # =========================================================
 # EMPTY STATES

@@ -1591,33 +1591,24 @@ async def show_dashboard_callback(
     user: DatabaseUser | None,
     data: dict[str, Any],
 ) -> None:
-    """
-    Dashboard callback.
-    """
-
-    state, stores, bushes, users = (
-        await build_director_dashboard(
-            user=user,
-            data=data,
-        )
-    )
-
     await safe_edit(
         callback,
         text=(
-            build_dashboard_text(
-                state
-            )
+            "\U0001f3e2 <b>\u041a\u0430\u0431\u0456\u043d\u0435\u0442 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0430</b>\n\n"
+            "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e:\n"
+            "\U0001f4ca \u0437\u0432\u0456\u0442 \u0437\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456\n"
+            "\U0001f4c5 \u0437\u0432\u0456\u0442 \u0437\u0430 \u0442\u0438\u0436\u0434\u0435\u043d\u044c\n"
+            "\U0001f5d3\ufe0f \u0437\u0432\u0456\u0442 \u0437\u0430 \u043c\u0456\u0441\u044f\u0446\u044c\n"
+            "\u2795 \u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044f "
+            "\u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430 \u043a\u0443\u0449\u0430"
         ),
         reply_markup=(
             build_keyboard(
-                director_main_keyboard,
-
-                state=state,
+                director_main_keyboard
             )
         ),
     )
-
 
 async def show_dashboard_message(
     message: Message,
@@ -1625,30 +1616,23 @@ async def show_dashboard_message(
     user: DatabaseUser | None,
     data: dict[str, Any],
 ) -> None:
-    """
-    Dashboard command.
-    """
-
-    state, stores, bushes, users = (
-        await build_director_dashboard(
-            user=user,
-            data=data,
-        )
-    )
-
     await message.answer(
-        build_dashboard_text(
-            state
+        (
+            "\U0001f3e2 <b>\u041a\u0430\u0431\u0456\u043d\u0435\u0442 "
+            "\u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0430</b>\n\n"
+            "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e:\n"
+            "\U0001f4ca \u0437\u0432\u0456\u0442 \u0437\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456\n"
+            "\U0001f4c5 \u0437\u0432\u0456\u0442 \u0437\u0430 \u0442\u0438\u0436\u0434\u0435\u043d\u044c\n"
+            "\U0001f5d3\ufe0f \u0437\u0432\u0456\u0442 \u0437\u0430 \u043c\u0456\u0441\u044f\u0446\u044c\n"
+            "\u2795 \u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044f "
+            "\u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430 \u043a\u0443\u0449\u0430"
         ),
         reply_markup=(
             build_keyboard(
-                director_main_keyboard,
-
-                state=state,
+                director_main_keyboard
             )
         ),
     )
-
 
 # =========================================================
 # /DIRECTOR
