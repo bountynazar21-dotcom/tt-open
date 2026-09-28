@@ -65,6 +65,12 @@ class DirectorAction(StrEnum):
 
     REPORTS = "rep"
 
+    REPORT_DAILY = "rd"
+
+    REPORT_WEEKLY = "rw"
+
+    REPORT_MONTHLY = "rm"
+
     INVITES = "inv"
 
     REFRESH = "r"
@@ -400,38 +406,27 @@ def director_main_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                inline_button(
-                    text="\U0001f4ca \u0417\u0432\u0456\u0442 \u0437\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456",
-                    callback=ReportCallback(
-                        action=ReportAction.DAILY,
-                        ref_id=0,
-                        page=0,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="\U0001f4c5 \u0417\u0432\u0456\u0442 \u0437\u0430 \u0442\u0438\u0436\u0434\u0435\u043d\u044c",
-                    callback=ReportCallback(
-                        action=ReportAction.WEEKLY,
-                        ref_id=0,
-                        page=0,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="\U0001f5d3\ufe0f \u0417\u0432\u0456\u0442 \u0437\u0430 \u043c\u0456\u0441\u044f\u0446\u044c",
-                    callback=ReportCallback(
-                        action=ReportAction.MONTHLY,
-                        ref_id=0,
-                        page=0,
-                    ),
+                director_button(
+                    text="\U0001f4ca \u0421\u044c\u043e\u0433\u043e\u0434\u043d\u0456",
+                    action=DirectorAction.REPORT_DAILY,
                 )
             ],
             [
                 director_button(
-                    text="\u2795 \u0417\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0438 \u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430",
+                    text="\U0001f4c5 \u0422\u0438\u0436\u0434\u0435\u043d\u044c",
+                    action=DirectorAction.REPORT_WEEKLY,
+                )
+            ],
+            [
+                director_button(
+                    text="\U0001f5d3\ufe0f \u041c\u0456\u0441\u044f\u0446\u044c",
+                    action=DirectorAction.REPORT_MONTHLY,
+                )
+            ],
+            [
+                director_button(
+                    text="\u2795 \u0417\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0438 "
+                         "\u0430\u0434\u043c\u0456\u043d\u0456\u0441\u0442\u0440\u0430",
                     action=DirectorAction.INVITES,
                 )
             ],
@@ -1472,32 +1467,22 @@ def director_reports_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                inline_button(
+                director_button(
                     text="\U0001f4ca \u0421\u044c\u043e\u0433\u043e\u0434\u043d\u0456",
-                    callback=ReportCallback(
-                        action=ReportAction.DAILY,
-                        ref_id=0,
-                        page=0,
-                    ),
+                    action=DirectorAction.REPORT_DAILY,
                 )
             ],
             [
-                inline_button(
+                director_button(
                     text="\U0001f4c5 \u0422\u0438\u0436\u0434\u0435\u043d\u044c",
-                    callback=ReportCallback(
-                        action=ReportAction.WEEKLY,
-                        ref_id=0,
-                        page=0,
-                    ),
-                ),
-                inline_button(
+                    action=DirectorAction.REPORT_WEEKLY,
+                )
+            ],
+            [
+                director_button(
                     text="\U0001f5d3\ufe0f \u041c\u0456\u0441\u044f\u0446\u044c",
-                    callback=ReportCallback(
-                        action=ReportAction.MONTHLY,
-                        ref_id=0,
-                        page=0,
-                    ),
-                ),
+                    action=DirectorAction.REPORT_MONTHLY,
+                )
             ],
             [
                 director_button(

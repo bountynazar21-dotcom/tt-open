@@ -1983,15 +1983,11 @@ def bush_admin_invites_keyboard(
     *,
     bush_id: int,
 ) -> InlineKeyboardMarkup:
-    """
-    Запрошення у кущ.
-    """
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 inline_button(
-                    text="🌿 Створити для куща",
+                    text="\U0001f981 \u0417\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0438 \u043b\u0435\u0432\u0430",
                     callback=InviteCallback(
                         action=InviteAction.BUSH,
                         target_id=bush_id,
@@ -2001,17 +1997,8 @@ def bush_admin_invites_keyboard(
             ],
             [
                 inline_button(
-                    text="🏪 Створити для ТТ",
-                    callback=InviteCallback(
-                        action=InviteAction.STORE,
-                        target_id=0,
-                        invite_id=0,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="📋 Активні запрошення",
+                    text="\U0001f4cb \u0410\u043a\u0442\u0438\u0432\u043d\u0456 "
+                         "\u0437\u0430\u043f\u0440\u043e\u0448\u0435\u043d\u043d\u044f",
                     callback=InviteCallback(
                         action=InviteAction.LIST,
                         target_id=bush_id,
@@ -2021,16 +2008,13 @@ def bush_admin_invites_keyboard(
             ],
             [
                 bush_admin_button(
-                    text="🔙 Назад",
-                    action=(
-                        BushAdminAction.MENU
-                    ),
+                    text="\U0001f519 \u041d\u0430\u0437\u0430\u0434",
+                    action=BushAdminAction.MENU,
                     bush_id=bush_id,
                 )
             ],
         ]
     )
-
 
 # =========================================================
 # MOVE STORE

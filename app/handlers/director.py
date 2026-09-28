@@ -863,6 +863,115 @@ async def query_bush_users(
     Користувачі куща.
     """
 
+
+    # First collect real bush bindings
+    # (BUSH_ADMIN / LION) and STORE_USER
+    # bindings from every TT in this bush.
+    repositories = data.get(
+        "repositories"
+    )
+
+    bindings_repository = getattr(
+        repositories,
+        "bindings",
+        None,
+    )
+
+    if bindings_repository is not None:
+        users_by_id: dict[int, Any] = {}
+
+        get_bush_users = getattr(
+            bindings_repository,
+            "get_users_for_bush",
+            None,
+        )
+
+        if callable(get_bush_users):
+            try:
+                bound_users = (
+                    await get_bush_users(
+                        bush_id,
+                        active_only=False,
+                    )
+                )
+            except Exception:
+                bound_users = []
+
+            for item in bound_users:
+                user_id = to_int(
+                    first_attr(
+                        item,
+                        "id",
+                        "user_id",
+                        default=0,
+                    )
+                )
+
+                if user_id > 0:
+                    users_by_id[
+                        user_id
+                    ] = item
+
+        get_store_users = getattr(
+            bindings_repository,
+            "get_users_for_store",
+            None,
+        )
+
+        if callable(get_store_users):
+            try:
+                bush_stores = (
+                    await load_bush_stores(
+                        bush_id=bush_id,
+                        data=data,
+                    )
+                )
+            except Exception:
+                bush_stores = []
+
+            for store in bush_stores:
+                store_id = to_int(
+                    first_attr(
+                        store,
+                        "id",
+                        "store_id",
+                        default=0,
+                    )
+                )
+
+                if store_id <= 0:
+                    continue
+
+                try:
+                    store_users = (
+                        await get_store_users(
+                            store_id,
+                            active_only=False,
+                        )
+                    )
+                except Exception:
+                    continue
+
+                for item in store_users:
+                    user_id = to_int(
+                        first_attr(
+                            item,
+                            "id",
+                            "user_id",
+                            default=0,
+                        )
+                    )
+
+                    if user_id > 0:
+                        users_by_id[
+                            user_id
+                        ] = item
+
+        if users_by_id:
+            return list(
+                users_by_id.values()
+            )
+
     payload = {
         "bush_id": bush_id,
 

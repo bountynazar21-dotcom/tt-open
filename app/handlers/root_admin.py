@@ -79,6 +79,7 @@ from app.keyboards.director import (
     director_users_keyboard,
 )
 
+from app.utils.datetime import today_local
 
 logger = logging.getLogger(
     __name__
@@ -2820,6 +2821,307 @@ async def director_missing_closing_callback(
 # =========================================================
 # REPORTS
 # =========================================================
+
+
+def format_director_report_money(
+    value: Any,
+) -> str:
+    try:
+        formatted = f"{value:,.2f}"
+    except Exception:
+        formatted = str(value or 0)
+
+    return (
+        formatted
+        .replace(",", " ")
+        .replace(".", ",")
+    )
+
+
+def build_director_period_report_text(
+    *,
+    title: str,
+    result: Any,
+) -> str:
+    totals = getattr(
+        result,
+        "totals",
+        None,
+    )
+
+    if totals is None:
+        return (
+            f"{title}\n\n"
+            "\u26a0\ufe0f "
+            "\u0414\u0430\u043d\u0456 "
+            "\u0437\u0432\u0456\u0442\u0443 "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0456."
+        )
+
+    business_date = getattr(
+        result,
+        "business_date",
+        None,
+    )
+
+    date_from = getattr(
+        result,
+        "date_from",
+        None,
+    )
+
+    date_to = getattr(
+        result,
+        "date_to",
+        None,
+    )
+
+    if business_date is not None:
+        period_text = (
+            business_date.strftime(
+                "%d.%m.%Y"
+            )
+        )
+    elif (
+        date_from is not None
+        and date_to is not None
+    ):
+        period_text = (
+            f"{date_from:%d.%m.%Y}"
+            f" \u2014 "
+            f"{date_to:%d.%m.%Y}"
+        )
+    else:
+        period_text = "\u2014"
+
+    cash = (
+        format_director_report_money(
+            getattr(
+                totals,
+                "total_cash",
+                0,
+            )
+        )
+    )
+
+    return (
+        f"{title}\n\n"
+        f"\U0001f4c5 "
+        f"<b>{period_text}</b>\n"
+        f"\U0001f3ea "
+        f"\u0422\u0422: "
+        f"<b>{getattr(totals, 'store_count', 0)}</b>\n\n"
+
+        f"\U0001f305 "
+        f"<b>\u0412\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f</b>\n"
+        f"\u2705 "
+        f"\u0412\u0456\u0434\u043a\u0440\u0438\u043b\u0438\u0441\u044c: "
+        f"<b>{getattr(totals, 'opened_count', 0)}/"
+        f"{getattr(totals, 'opening_expected_count', 0)}</b>\n"
+        f"\U0001f7e2 "
+        f"\u0412\u0447\u0430\u0441\u043d\u043e: "
+        f"<b>{getattr(totals, 'opened_on_time_count', 0)}</b>\n"
+        f"\u26a0\ufe0f "
+        f"\u0406\u0437 "
+        f"\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c: "
+        f"<b>{getattr(totals, 'opened_late_count', 0)}</b>\n"
+        f"\U0001f6a8 "
+        f"\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: "
+        f"<b>{getattr(totals, 'opening_missed_count', 0)}</b>\n"
+        f"\u23f3 "
+        f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c: "
+        f"<b>{getattr(totals, 'opening_waiting_count', 0)}</b>\n\n"
+
+        f"\U0001f319 "
+        f"<b>\u0417\u0430\u043a\u0440\u0438\u0442\u0442\u044f</b>\n"
+        f"\u2705 "
+        f"\u041f\u043e\u0434\u0430\u043d\u043e: "
+        f"<b>{getattr(totals, 'closing_submitted_count', 0)}/"
+        f"{getattr(totals, 'closing_expected_count', 0)}</b>\n"
+        f"\U0001f7e2 "
+        f"\u0412\u0447\u0430\u0441\u043d\u043e: "
+        f"<b>{getattr(totals, 'closing_on_time_count', 0)}</b>\n"
+        f"\u26a0\ufe0f "
+        f"\u0406\u0437 "
+        f"\u0437\u0430\u043f\u0456\u0437\u043d\u0435\u043d\u043d\u044f\u043c: "
+        f"<b>{getattr(totals, 'closing_late_count', 0)}</b>\n"
+        f"\U0001f6a8 "
+        f"\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: "
+        f"<b>{getattr(totals, 'closing_missed_count', 0)}</b>\n"
+        f"\u23f3 "
+        f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c: "
+        f"<b>{getattr(totals, 'closing_waiting_count', 0)}</b>\n\n"
+
+        f"\U0001f4b0 "
+        f"<b>\u041a\u0430\u0441\u0430: "
+        f"{cash} \u0433\u0440\u043d</b>"
+    )
+
+
+@router.callback_query(
+    DirectorCallback.filter(
+        F.action.in_(
+            {
+                DirectorAction.REPORT_DAILY,
+                DirectorAction.REPORT_WEEKLY,
+                DirectorAction.REPORT_MONTHLY,
+            }
+        )
+    )
+)
+async def director_period_report_callback(
+    callback: CallbackQuery,
+    callback_data: DirectorCallback,
+    **data: Any,
+) -> None:
+    user = get_database_user(
+        data
+    )
+
+    if not can_use_director_panel(
+        user
+    ):
+        await callback.answer(
+            "\u041d\u0435\u043c\u0430\u0454 "
+            "\u0434\u043e\u0441\u0442\u0443\u043f\u0443.",
+            show_alert=True,
+        )
+        return
+
+    message = callback.message
+    chat = getattr(
+        message,
+        "chat",
+        None,
+    )
+    chat_type = getattr(
+        chat,
+        "type",
+        None,
+    )
+    chat_type = getattr(
+        chat_type,
+        "value",
+        chat_type,
+    )
+
+    if chat_type != "private":
+        await callback.answer(
+            "\u0417\u0432\u0456\u0442 "
+            "\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439 "
+            "\u043b\u0438\u0448\u0435 "
+            "\u0443 \u043f\u0440\u0438\u0432\u0430\u0442\u043d\u043e\u043c\u0443 "
+            "\u0447\u0430\u0442\u0456.",
+            show_alert=True,
+        )
+        return
+
+    service = get_service(
+        data,
+        "reports",
+        "report",
+    )
+
+    if service is None:
+        await callback.answer(
+            "\u0421\u0435\u0440\u0432\u0456\u0441 "
+            "\u0437\u0432\u0456\u0442\u0456\u0432 "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer(
+        "\u0424\u043e\u0440\u043c\u0443\u044e "
+        "\u0437\u0432\u0456\u0442\u2026"
+    )
+
+    today = today_local()
+
+    try:
+        if (
+            callback_data.action
+            == DirectorAction.REPORT_DAILY
+        ):
+            result = (
+                await service.get_daily_report(
+                    user=user,
+                    business_date=today,
+                )
+            )
+
+            title = (
+                "\U0001f4ca "
+                "<b>\u0417\u0432\u0456\u0442 "
+                "\u0437\u0430 "
+                "\u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456</b>"
+            )
+
+        elif (
+            callback_data.action
+            == DirectorAction.REPORT_WEEKLY
+        ):
+            result = (
+                await service.get_weekly_report(
+                    user=user,
+                    reference_date=today,
+                )
+            )
+
+            title = (
+                "\U0001f4c5 "
+                "<b>\u0417\u0432\u0456\u0442 "
+                "\u0437\u0430 "
+                "\u0442\u0438\u0436\u0434\u0435\u043d\u044c</b>"
+            )
+
+        else:
+            result = (
+                await service.get_monthly_report(
+                    user=user,
+                    year=today.year,
+                    month=today.month,
+                )
+            )
+
+            title = (
+                "\U0001f5d3\ufe0f "
+                "<b>\u0417\u0432\u0456\u0442 "
+                "\u0437\u0430 "
+                "\u043c\u0456\u0441\u044f\u0446\u044c</b>"
+            )
+
+    except Exception:
+        logger.exception(
+            "Director report generation failed"
+        )
+
+        await safe_edit(
+            callback,
+            text=(
+                "\u274c "
+                "<b>\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+                "\u0441\u0444\u043e\u0440\u043c\u0443\u0432\u0430\u0442\u0438 "
+                "\u0437\u0432\u0456\u0442.</b>"
+            ),
+            reply_markup=build_keyboard(
+                director_main_keyboard
+            ),
+        )
+        return
+
+    await safe_edit(
+        callback,
+        text=(
+            build_director_period_report_text(
+                title=title,
+                result=result,
+            )
+        ),
+        reply_markup=build_keyboard(
+            director_main_keyboard
+        ),
+    )
 
 
 @router.callback_query(
