@@ -25,3 +25,12 @@ storage/temp/*
 *_inspect.txt
 *_inspection.txt
 *_core.txt
+
+# Local development files
+.patch_backups/
+.ruff_cache/
+*.bak-*
+*_dump.txt
+*_inspect.txt
+*_inspection.txt
+*_core.txt
