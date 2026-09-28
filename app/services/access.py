@@ -1253,8 +1253,6 @@ class AccessService:
         bush_id: int,
         target_role: UserRole,
     ) -> AccessDecision:
-        """Перевіряє запрошення адміністратора або лева."""
-
         permission = (
             AccessPermission.CREATE_BUSH_INVITE
         )
@@ -1265,7 +1263,7 @@ class AccessService:
         }:
             return self.deny(
                 permission,
-                "Некоректна роль запрошення.",
+                "Invalid bush invite role.",
                 user=user,
                 bush_id=bush_id,
             )
@@ -1273,44 +1271,71 @@ class AccessService:
         if not self.is_active_user(user):
             return self.deny(
                 permission,
-                "Користувач неактивний або заблокований.",
+                "User is inactive or blocked.",
                 user=user,
                 bush_id=bush_id,
             )
 
-        if self.is_global_manager(user):
+        # ROOT can create both roles.
+        if self.is_root_admin(user):
             return self.allow(
                 permission,
-                "Користувач має глобальні права.",
+                "ROOT_ADMIN access.",
                 user=user,
                 bush_id=bush_id,
             )
 
-        if (
-            user.role == UserRole.BUSH_ADMIN
-            and target_role == UserRole.LION
-        ):
-            management_decision = (
-                await self.can_manage_bush(
-                    user,
-                    bush_id,
-                )
-            )
-
-            if management_decision.allowed:
+        # Director can invite ONLY BUSH_ADMIN.
+        if user.role == UserRole.DIRECTOR:
+            if target_role == UserRole.BUSH_ADMIN:
                 return self.allow(
                     permission,
-                    "Адміністратор може запросити "
-                    "лева у свій кущ.",
+                    "Director can invite BUSH_ADMIN.",
                     user=user,
                     bush_id=bush_id,
                 )
 
+            return self.deny(
+                permission,
+                "Director can invite only BUSH_ADMIN.",
+                user=user,
+                bush_id=bush_id,
+            )
+
+        # Bush admin can invite ONLY LION
+        # and only to own bush.
+        if user.role == UserRole.BUSH_ADMIN:
+            if target_role != UserRole.LION:
+                return self.deny(
+                    permission,
+                    "BUSH_ADMIN can invite only LION.",
+                    user=user,
+                    bush_id=bush_id,
+                )
+
+            decision = await self.can_manage_bush(
+                user,
+                bush_id,
+            )
+
+            if decision.allowed:
+                return self.allow(
+                    permission,
+                    "BUSH_ADMIN can invite LION to own bush.",
+                    user=user,
+                    bush_id=bush_id,
+                )
+
+            return self.deny(
+                permission,
+                "BUSH_ADMIN cannot invite to another bush.",
+                user=user,
+                bush_id=bush_id,
+            )
+
         return self.deny(
             permission,
-            "Запросити адміністратора куща може "
-            "директор або ROOT_ADMIN. Адміністратор "
-            "може запросити лише лева у свій кущ.",
+            "Role cannot create bush invites.",
             user=user,
             bush_id=bush_id,
         )
@@ -1356,14 +1381,12 @@ class AccessService:
         target_role: UserRole,
         bush_id: int | None = None,
     ) -> AccessDecision:
-        """Перевіряє призначення ролі."""
-
         permission = AccessPermission.MANAGE_USERS
 
         if not self.is_active_user(user):
             return self.deny(
                 permission,
-                "Користувач неактивний або заблокований.",
+                "User is inactive or blocked.",
                 user=user,
                 bush_id=bush_id,
             )
@@ -1371,8 +1394,7 @@ class AccessService:
         if target_role == UserRole.ROOT_ADMIN:
             return self.deny(
                 permission,
-                "Роль ROOT_ADMIN не можна "
-                "призначити через Telegram-бота.",
+                "ROOT_ADMIN cannot be assigned via bot.",
                 user=user,
                 bush_id=bush_id,
             )
@@ -1380,66 +1402,67 @@ class AccessService:
         if self.is_root_admin(user):
             return self.allow(
                 permission,
-                "ROOT_ADMIN може призначити цю роль.",
+                "ROOT_ADMIN access.",
                 user=user,
                 bush_id=bush_id,
             )
 
+        # Director -> BUSH_ADMIN only.
         if user.role == UserRole.DIRECTOR:
-            if target_role in {
-                UserRole.BUSH_ADMIN,
-                UserRole.LION,
-                UserRole.STORE_USER,
-            }:
+            if (
+                target_role == UserRole.BUSH_ADMIN
+                and bush_id is not None
+            ):
                 return self.allow(
                     permission,
-                    "Директор може призначити цю роль.",
+                    "Director can assign BUSH_ADMIN.",
                     user=user,
                     bush_id=bush_id,
                 )
 
-        if user.role == UserRole.BUSH_ADMIN:
-            if bush_id is None:
-                return self.deny(
-                    permission,
-                    "Для призначення ролі потрібно "
-                    "вказати кущ.",
-                    user=user,
-                )
-
-            if target_role not in {
-                UserRole.LION,
-                UserRole.STORE_USER,
-            }:
-                return self.deny(
-                    permission,
-                    "Адміністратор куща може "
-                    "призначати лише лева або "
-                    "працівника ТТ.",
-                    user=user,
-                    bush_id=bush_id,
-                )
-
-            management_decision = (
-                await self.can_manage_bush(
-                    user,
-                    bush_id,
-                )
+            return self.deny(
+                permission,
+                "Director can assign only BUSH_ADMIN.",
+                user=user,
+                bush_id=bush_id,
             )
 
-            if management_decision.allowed:
-                return self.allow(
+        # BUSH_ADMIN -> LION only in own bush.
+        if user.role == UserRole.BUSH_ADMIN:
+            if (
+                target_role != UserRole.LION
+                or bush_id is None
+            ):
+                return self.deny(
                     permission,
-                    "Адміністратор може призначити "
-                    "роль у своєму кущі.",
+                    "BUSH_ADMIN can assign only LION.",
                     user=user,
                     bush_id=bush_id,
                 )
+
+            decision = await self.can_manage_bush(
+                user,
+                bush_id,
+            )
+
+            if decision.allowed:
+                return self.allow(
+                    permission,
+                    "BUSH_ADMIN can assign LION.",
+                    user=user,
+                    bush_id=bush_id,
+                )
+
+            return self.deny(
+                permission,
+                "Bush is outside user scope.",
+                user=user,
+                bush_id=bush_id,
+            )
 
         return self.deny(
             permission,
-            "Користувач не має права "
-            "призначати цю роль.",
+            "Role assignment is not allowed.",
             user=user,
             bush_id=bush_id,
         )

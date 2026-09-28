@@ -2108,26 +2108,54 @@ class BindingService:
         role: UserRole,
         bush_id: int,
     ) -> None:
-        """
-        Перевіряє право призначити роль у кущі.
-        """
-
         if role == UserRole.BUSH_ADMIN:
             if actor.role not in {
                 UserRole.ROOT_ADMIN,
                 UserRole.DIRECTOR,
             }:
                 raise AccessDeniedError(
-                    "Призначати адміністратора куща "
-                    "може лише директор або ROOT_ADMIN."
+                    "Only ROOT_ADMIN or DIRECTOR "
+                    "can assign BUSH_ADMIN."
                 )
 
-        decision = await self.access.can_manage_bush(
-            actor,
-            bush_id,
-        )
+        elif role == UserRole.LION:
+            if actor.role == UserRole.ROOT_ADMIN:
+                pass
 
-        decision.raise_if_denied()
+            elif actor.role == UserRole.BUSH_ADMIN:
+                decision = (
+                    await self.access.can_manage_bush(
+                        actor,
+                        bush_id,
+                    )
+                )
+
+                decision.raise_if_denied()
+
+            else:
+                raise AccessDeniedError(
+                    "Only ROOT_ADMIN or BUSH_ADMIN "
+                    "can assign LION."
+                )
+
+        else:
+            raise AccessDeniedError(
+                "Unsupported bush role."
+            )
+
+        # Verify bush access for global/allowed actor.
+        if actor.role in {
+            UserRole.ROOT_ADMIN,
+            UserRole.DIRECTOR,
+        }:
+            decision = (
+                await self.access.can_manage_bush(
+                    actor,
+                    bush_id,
+                )
+            )
+
+            decision.raise_if_denied()
 
         await self.ensure_can_manage_target(
             actor=actor,

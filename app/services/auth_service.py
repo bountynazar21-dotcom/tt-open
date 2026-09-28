@@ -1886,8 +1886,6 @@ class AuthService:
         bush_id: int | None,
         allow_missing_scope: bool = False,
     ) -> None:
-        """Перевіряє право призначення ролі."""
-
         self.access.ensure_active_user(actor)
 
         if role == UserRole.ROOT_ADMIN:
@@ -1898,19 +1896,47 @@ class AuthService:
             self.access.ensure_root_admin(actor)
             return
 
-        if role in {
-            UserRole.BUSH_ADMIN,
-            UserRole.LION,
-        }:
+        # Director -> BUSH_ADMIN only.
+        if role == UserRole.BUSH_ADMIN:
             if bush_id is None:
-                if allow_missing_scope:
-                    self.access.require_network_management(
-                        actor
-                    )
+                if (
+                    allow_missing_scope
+                    and actor.role in {
+                        UserRole.ROOT_ADMIN,
+                        UserRole.DIRECTOR,
+                    }
+                ):
                     return
 
                 raise ValueError(
-                    "Для цієї ролі потрібно вказати кущ."
+                    "Bush is required for BUSH_ADMIN."
+                )
+
+            if actor.role in {
+                UserRole.ROOT_ADMIN,
+                UserRole.DIRECTOR,
+            }:
+                return
+
+            raise AccessDeniedError(
+                "Only ROOT_ADMIN or DIRECTOR "
+                "can assign BUSH_ADMIN."
+            )
+
+        # BUSH_ADMIN -> LION only in own bush.
+        if role == UserRole.LION:
+            if bush_id is None:
+                raise ValueError(
+                    "Bush is required for LION."
+                )
+
+            if actor.role == UserRole.ROOT_ADMIN:
+                return
+
+            if actor.role != UserRole.BUSH_ADMIN:
+                raise AccessDeniedError(
+                    "Only ROOT_ADMIN or BUSH_ADMIN "
+                    "can assign LION."
                 )
 
             decision = (
@@ -1923,17 +1949,19 @@ class AuthService:
             decision.raise_if_denied()
             return
 
+        # Keep existing employee onboarding logic.
         if role == UserRole.STORE_USER:
+            if actor.role != UserRole.ROOT_ADMIN:
+                raise AccessDeniedError(
+                    "Only ROOT_ADMIN can assign STORE_USER."
+                )
+
             if store_id is None:
                 if allow_missing_scope:
-                    await self.ensure_can_manage_target(
-                        actor=actor,
-                        target=target,
-                    )
                     return
 
                 raise ValueError(
-                    "Для працівника потрібно вказати ТТ."
+                    "Store is required for STORE_USER."
                 )
 
             decision = (
@@ -1947,7 +1975,7 @@ class AuthService:
             return
 
         raise AccessDeniedError(
-            "Призначення цієї ролі не підтримується."
+            "Role assignment is not supported."
         )
 
     async def ensure_can_manage_target(

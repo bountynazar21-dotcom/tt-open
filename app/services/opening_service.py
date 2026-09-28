@@ -1017,21 +1017,20 @@ class OpeningService:
         store: Store,
     ) -> list[User]:
         """
-        Recipients of a missed-opening alert.
+        Returns recipients of missed opening/closing alerts.
 
-        Receive:
-        - ROOT_ADMIN for the whole network;
-        - BUSH_ADMIN for their own bush;
-        - LION for their own bush.
-
-        Do not receive:
-        - DIRECTOR;
-        - store employees.
+        Rules:
+        - ROOT_ADMIN: all stores in the network;
+        - BUSH_ADMIN: only stores of their bush;
+        - LION: only stores of their bush;
+        - DIRECTOR: no operational alerts;
+        - STORE_USER: no managerial alerts.
         """
 
         recipients: dict[int, User] = {}
 
-        # Bush admin and lions of this bush.
+        # Bush-level recipients:
+        # BUSH_ADMIN + LION of this exact bush.
         if store.bush_id is not None:
             bush_users = (
                 await self.repositories.bindings
@@ -1048,9 +1047,15 @@ class OpeningService:
                 }:
                     continue
 
+                if (
+                    user.status != UserStatus.ACTIVE
+                    or user.is_blocked
+                ):
+                    continue
+
                 recipients[user.id] = user
 
-        # ROOT_ADMIN receives alerts for the whole network.
+        # ROOT_ADMIN receives alerts network-wide.
         statement = (
             select(User)
             .where(
@@ -1058,9 +1063,7 @@ class OpeningService:
                 User.status == UserStatus.ACTIVE,
                 User.is_blocked.is_(False),
             )
-            .order_by(
-                User.id.asc()
-            )
+            .order_by(User.id.asc())
         )
 
         result = await self.session.scalars(
@@ -1070,9 +1073,7 @@ class OpeningService:
         for user in result.unique().all():
             recipients[user.id] = user
 
-        return list(
-            recipients.values()
-        )
+        return list(recipients.values())
 
     # ==========================================
     # ЖИВІ ПІДСУМКИ

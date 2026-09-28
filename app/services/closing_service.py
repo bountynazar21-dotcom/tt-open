@@ -1533,21 +1533,21 @@ class ClosingService:
         self,
         store: Store,
     ) -> list[User]:
-        """Повертає отримувачів вечірнього сповіщення."""
+        """
+        Returns recipients of missed opening/closing alerts.
+
+        Rules:
+        - ROOT_ADMIN: all stores in the network;
+        - BUSH_ADMIN: only stores of their bush;
+        - LION: only stores of their bush;
+        - DIRECTOR: no operational alerts;
+        - STORE_USER: no managerial alerts.
+        """
 
         recipients: dict[int, User] = {}
 
-        store_users = (
-            await self.repositories.bindings
-            .get_users_for_store(
-                store.id,
-                active_only=True,
-            )
-        )
-
-        for user in store_users:
-            recipients[user.id] = user
-
+        # Bush-level recipients:
+        # BUSH_ADMIN + LION of this exact bush.
         if store.bush_id is not None:
             bush_users = (
                 await self.repositories.bindings
@@ -1558,17 +1558,25 @@ class ClosingService:
             )
 
             for user in bush_users:
+                if user.role not in {
+                    UserRole.BUSH_ADMIN,
+                    UserRole.LION,
+                }:
+                    continue
+
+                if (
+                    user.status != UserStatus.ACTIVE
+                    or user.is_blocked
+                ):
+                    continue
+
                 recipients[user.id] = user
 
+        # ROOT_ADMIN receives alerts network-wide.
         statement = (
             select(User)
             .where(
-                User.role.in_(
-                    {
-                        UserRole.ROOT_ADMIN,
-                        UserRole.DIRECTOR,
-                    }
-                ),
+                User.role == UserRole.ROOT_ADMIN,
                 User.status == UserStatus.ACTIVE,
                 User.is_blocked.is_(False),
             )
