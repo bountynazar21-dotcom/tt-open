@@ -243,6 +243,10 @@ async def run_polling() -> None:
     await dispatcher.start_polling(
         bot,
         allowed_updates=allowed_updates,
+        handle_as_tasks=True,
+        tasks_concurrency_limit=(
+            settings.telegram_updates_concurrency
+        ),
     )
 
 

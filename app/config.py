@@ -193,11 +193,23 @@ class Settings(BaseSettings):
         le=300,
     )
 
+    database_pool_recycle: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+    )
+
     # =====================================================
     # APPLICATION
     # =====================================================
 
     app_name: str = "Chikin Bot"
+
+    telegram_updates_concurrency: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+    )
 
     app_env: Literal[
         "development",
