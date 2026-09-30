@@ -12,6 +12,7 @@ from html import escape
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import (
     State,
@@ -73,6 +74,41 @@ from app.keyboards.store import (
 logger = logging.getLogger(
     __name__
 )
+
+
+async def safe_callback_answer(
+    callback: CallbackQuery,
+    text: str | None = None,
+    *,
+    show_alert: bool = False,
+) -> bool:
+    """
+    Telegram ACK must never block
+    a critical business operation.
+    """
+
+    try:
+        await callback.answer(
+            text=text,
+            show_alert=show_alert,
+        )
+
+        return True
+
+    except TelegramAPIError as error:
+        logger.warning(
+            "Telegram callback ACK failed; "
+            "business flow continues | "
+            "tg_user=%s error=%s",
+            getattr(
+                callback.from_user,
+                "id",
+                None,
+            ),
+            error,
+        )
+
+        return False
 
 
 # =========================================================
@@ -1249,7 +1285,11 @@ async def complete_closing(
                 "cash_amount": cash_amount,
                 "receipt_file_id": receipt_file_id,
                 "queue_group_message": True,
-                "update_summaries": True,
+                # Summaries are refreshed by the
+                # background scheduler. Do not make
+                # every store closing contend for
+                # the shared network summary.
+                "update_summaries": False,
             },
         )
 
@@ -2775,8 +2815,9 @@ async def closing_confirm_callback(
         )
         return
 
-    await callback.answer(
-        "Завершую зміну…"
+    await safe_callback_answer(
+        callback,
+        "Завершую зміну…",
     )
 
     try:
@@ -2807,7 +2848,8 @@ async def closing_confirm_callback(
     if not result_success(
         result
     ):
-        await callback.answer(
+        await safe_callback_answer(
+            callback,
             result_message(
                 result
             )
@@ -2817,36 +2859,120 @@ async def closing_confirm_callback(
 
         return
 
-    await state.clear()
-
-    current = await get_closing_status(
-        store_id=store_id,
-        user=user,
-        data=data,
+    service = get_closing_service(
+        data
     )
 
-    text = await build_closing_status_text(
-        store_id=store_id,
-        result=(
-            current
-            or result
-        ),
-        data=data,
-    )
+    if service is None:
+        logger.error(
+            "ClosingService missing before "
+            "closing commit | "
+            "store_id=%s report_id=%s",
+            store_id,
+            report_id,
+        )
 
-    await safe_edit(
-        callback,
-        text=(
-            "✅ <b>Зміну успішно "
-            "завершено.</b>\n\n"
-            f"{text}"
-        ),
-        reply_markup=(
-            closing_success_keyboard(
-                store_id=store_id
+        await safe_callback_answer(
+            callback,
+            "Не вдалося "
+            "зафіксувати "
+            "закриття.",
+            show_alert=True,
+        )
+
+        return
+
+    session = service.session
+
+    try:
+        await session.commit()
+
+    except Exception:
+        logger.exception(
+            "Closing commit failed: "
+            "store_id=%s report_id=%s",
+            store_id,
+            report_id,
+        )
+
+        try:
+            await session.rollback()
+
+        except Exception:
+            logger.exception(
+                "Closing rollback failed: "
+                "store_id=%s report_id=%s",
+                store_id,
+                report_id,
             )
-        ),
+
+        await safe_callback_answer(
+            callback,
+            "Не вдалося "
+            "зафіксувати "
+            "закриття.",
+            show_alert=True,
+        )
+
+        return
+
+    logger.info(
+        "Closing committed | "
+        "store_id=%s report_id=%s",
+        store_id,
+        report_id,
     )
+
+    try:
+        await state.clear()
+
+        current = await get_closing_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
+
+        status_text = (
+            await build_closing_status_text(
+                store_id=store_id,
+                result=(
+                    current
+                    or result
+                ),
+                data=data,
+            )
+        )
+
+        await safe_edit(
+            callback,
+            text=(
+                "✅ <b>Зміну успішно "
+                "завершено.</b>\n\n"
+                f"{status_text}"
+            ),
+            reply_markup=(
+                closing_success_keyboard(
+                    store_id=store_id
+                )
+            ),
+        )
+
+    except Exception as error:
+        # Closing is already committed.
+        # Nothing after commit may invalidate
+        # a successfully submitted report.
+        logger.warning(
+            "Closing committed but post-commit "
+            "processing failed | "
+            "store_id=%s report_id=%s "
+            "error=%s",
+            store_id,
+            report_id,
+            error,
+            exc_info=True,
+        )
+
+
 
 
 # =========================================================
