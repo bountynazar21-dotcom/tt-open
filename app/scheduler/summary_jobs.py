@@ -26,6 +26,71 @@ def now_local() -> datetime:
     )
 
 
+async def _sync_closing_summaries_in_order(
+    *,
+    services,
+    business_date,
+):
+    """
+    Спочатку всі кущі.
+    Потім загальний результат мережі.
+    """
+
+    bush_decisions = (
+        await services.closing
+        .prepare_all_closing_summaries(
+            business_date=(
+                business_date
+            ),
+            timezone_name=(
+                settings.timezone
+            ),
+            include_network=False,
+        )
+    )
+
+    bush_result = None
+
+    if bush_decisions:
+        bush_result = (
+            await services.summaries
+            .sync_decisions(
+                bush_decisions,
+                commit_each=True,
+            )
+        )
+
+    network_decisions = (
+        await services.closing
+        .prepare_summary_updates(
+            business_date=(
+                business_date
+            ),
+            bush_ids=set(),
+            timezone_name=(
+                settings.timezone
+            ),
+            include_network=True,
+        )
+    )
+
+    network_result = None
+
+    if network_decisions:
+        network_result = (
+            await services.summaries
+            .sync_decisions(
+                network_decisions,
+                commit_each=True,
+            )
+        )
+
+    return (
+        bush_result,
+        network_result,
+    )
+
+
 async def process_opening_summaries_job(
     *,
     bot: Bot,
@@ -123,24 +188,27 @@ async def process_closing_summaries_job(
     bot: Bot,
 ) -> None:
     """
-    Формує та синхронізує вечірні
-    live-summary повідомлення.
+    Спочатку синхронізує всі кущі,
+    потім загальний звіт мережі.
     """
 
     async with async_session_factory() as session:
         try:
-            acquired = await try_scheduler_lock(
-                session,
-                lock_id=(
-                    settings.scheduler_lock_id
-                    + 402
-                ),
+            acquired = (
+                await try_scheduler_lock(
+                    session,
+                    lock_id=(
+                        settings.scheduler_lock_id
+                        + 402
+                    ),
+                )
             )
 
             if not acquired:
                 logger.debug(
-                    "process_closing_summaries_job skipped: "
-                    "scheduler lock already held"
+                    "process_closing_summaries_job "
+                    "skipped: scheduler lock "
+                    "already held"
                 )
                 return
 
@@ -151,53 +219,56 @@ async def process_closing_summaries_job(
             services = create_services(
                 repositories,
                 bot=bot,
-                bot_username=settings.bot_username,
+                bot_username=(
+                    settings.bot_username
+                ),
             )
 
             current_time = now_local()
 
-            decisions = (
-                await services.closing
-                .prepare_summary_updates(
-                    business_date=current_time.date(),
-                    timezone_name=settings.timezone,
-                )
-            )
-
-            if not decisions:
-                await session.commit()
-
-                logger.debug(
-                    "No closing summary updates | date=%s",
-                    current_time.date(),
-                )
-                return
-
-            result = (
-                await services.summaries
-                .sync_decisions(
-                    decisions,
-                    commit_each=True,
+            (
+                bush_result,
+                network_result,
+            ) = (
+                await
+                _sync_closing_summaries_in_order(
+                    services=services,
+                    business_date=(
+                        current_time.date()
+                    ),
                 )
             )
 
             await session.commit()
 
             logger.info(
-                "Closing summaries synced | "
-                "date=%s total=%s sent=%s "
-                "edited=%s recreated=%s "
-                "unchanged=%s retry=%s "
-                "failed=%s skipped=%s",
+                "Closing summaries synced "
+                "in order | "
+                "date=%s bushes=%s "
+                "bush_failed=%s "
+                "network=%s "
+                "network_failed=%s",
                 current_time.date(),
-                result.total_count,
-                result.sent_count,
-                result.edited_count,
-                result.recreated_count,
-                result.unchanged_count,
-                result.retry_count,
-                result.failed_count,
-                result.skipped_count,
+                (
+                    bush_result.total_count
+                    if bush_result
+                    else 0
+                ),
+                (
+                    bush_result.failed_count
+                    if bush_result
+                    else 0
+                ),
+                (
+                    network_result.total_count
+                    if network_result
+                    else 0
+                ),
+                (
+                    network_result.failed_count
+                    if network_result
+                    else 0
+                ),
             )
 
         except Exception:
@@ -205,6 +276,180 @@ async def process_closing_summaries_job(
 
             logger.exception(
                 "process_closing_summaries_job failed"
+            )
+
+            raise
+
+
+async def final_closing_recount_job(
+    *,
+    bot: Bot,
+) -> None:
+    """
+    Контрольний перерахунок о 22:22.
+
+    Якщо хоча б одна ТТ не здала звіт:
+    - обробляємо дедлайни;
+    - перераховуємо всі кущі;
+    - після цього мережу.
+    """
+
+    async with async_session_factory() as session:
+        try:
+            acquired = (
+                await try_scheduler_lock(
+                    session,
+                    lock_id=(
+                        settings.scheduler_lock_id
+                        + 402
+                    ),
+                )
+            )
+
+            if not acquired:
+                logger.info(
+                    "final_closing_recount_job "
+                    "skipped: closing sync "
+                    "already running"
+                )
+                return
+
+            repositories = Repositories(
+                session
+            )
+
+            services = create_services(
+                repositories,
+                bot=bot,
+                bot_username=(
+                    settings.bot_username
+                ),
+            )
+
+            current_time = now_local()
+
+            business_date = (
+                current_time.date()
+            )
+
+            await (
+                services.closing
+                .prepare_daily_records(
+                    business_date=(
+                        business_date
+                    )
+                )
+            )
+
+            await (
+                services.closing
+                .process_due_deadlines(
+                    current_time=(
+                        current_time
+                    ),
+                    timezone_name=(
+                        settings.timezone
+                    ),
+                    create_notifications=True,
+                    update_summaries=False,
+                )
+            )
+
+            stats = (
+                await repositories
+                .closings
+                .get_daily_statistics(
+                    business_date=(
+                        business_date
+                    )
+                )
+            )
+
+            expected = int(
+                stats[
+                    "expected_count"
+                ]
+            )
+
+            submitted = int(
+                stats[
+                    "submitted_count"
+                ]
+            )
+
+            missing = max(
+                expected - submitted,
+                0,
+            )
+
+            if missing == 0:
+                await session.commit()
+
+                logger.info(
+                    "22:22 recount not needed | "
+                    "date=%s expected=%s "
+                    "submitted=%s",
+                    business_date,
+                    expected,
+                    submitted,
+                )
+
+                return
+
+            (
+                bush_result,
+                network_result,
+            ) = (
+                await
+                _sync_closing_summaries_in_order(
+                    services=services,
+                    business_date=(
+                        business_date
+                    ),
+                )
+            )
+
+            await session.commit()
+
+            logger.warning(
+                "22:22 recount completed | "
+                "date=%s expected=%s "
+                "submitted=%s missing=%s "
+                "bushes=%s "
+                "bush_failed=%s "
+                "network=%s "
+                "network_failed=%s",
+                business_date,
+                expected,
+                submitted,
+                missing,
+                (
+                    bush_result.total_count
+                    if bush_result
+                    else 0
+                ),
+                (
+                    bush_result.failed_count
+                    if bush_result
+                    else 0
+                ),
+                (
+                    network_result.total_count
+                    if network_result
+                    else 0
+                ),
+                (
+                    network_result.failed_count
+                    if network_result
+                    else 0
+                ),
+            )
+
+        except Exception:
+            await session.rollback()
+
+            logger.exception(
+                "final_closing_recount_job failed"
             )
 
             raise
@@ -296,5 +541,6 @@ async def recover_pending_summaries_job(
 __all__ = [
     "process_opening_summaries_job",
     "process_closing_summaries_job",
+    "final_closing_recount_job",
     "recover_pending_summaries_job",
 ]

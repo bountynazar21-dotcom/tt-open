@@ -1610,15 +1610,13 @@ class ClosingService:
         changed_store: Store | None = None,
         bush_ids: set[int] | None = None,
         timezone_name: str | None = None,
+        include_network: bool = True,
     ) -> list[SummaryUpdateDecision]:
         """
-        Готує оновлення вечірніх підсумків.
+        Готує вечірні підсумки.
 
-        Повертає рішення для Telegram worker:
-
-        - надіслати нове повідомлення;
-        - відредагувати існуюче;
-        - нічого не робити.
+        Помилка одного куща не повинна
+        зупиняти інші кущі.
         """
 
         summaries_enabled = (
@@ -1666,6 +1664,8 @@ class ClosingService:
             SummaryUpdateDecision
         ] = []
 
+        preparation_errors: list[str] = []
+
         bush_summary_type = (
             self.resolve_summary_type(
                 "closing_bush",
@@ -1678,61 +1678,112 @@ class ClosingService:
         for bush_id in sorted(
             target_bush_ids
         ):
-            bush = await self.session.get(
-                Bush,
-                bush_id,
-            )
+            bush = None
 
-            if bush is None:
-                continue
-
-            bush_destination = (
-                await self.groups.resolve_destination(
-                    topic=(
-                        TelegramGroupTopic.SUMMARIES
-                    ),
-                    bush_id=bush.id,
-                    fallback_to_network=True,
+            try:
+                bush = await self.session.get(
+                    Bush,
+                    bush_id,
                 )
-            )
 
-            if bush_destination is None:
-                continue
+                if bush is None:
+                    preparation_errors.append(
+                        f"Кущ #{bush_id}: "
+                        "не знайдений у БД"
+                    )
+                    continue
 
-            message_text, snapshot = (
-                await self.build_bush_summary(
-                    bush=bush,
-                    business_date=business_date,
-                    timezone_name=(
-                        resolved_timezone
-                    ),
+                bush_destination = (
+                    await self.groups
+                    .resolve_destination(
+                        topic=(
+                            TelegramGroupTopic
+                            .SUMMARIES
+                        ),
+                        bush_id=bush.id,
+                        fallback_to_network=False,
+                    )
                 )
-            )
 
-            decision = (
-                await self.repositories
-                .daily_summaries
-                .prepare_update(
-                    summary_type=(
-                        bush_summary_type
-                    ),
-                    business_date=(
-                        business_date
-                    ),
-                    chat_id=(
-                        bush_destination.chat_id
-                    ),
-                    bush_id=bush.id,
-                    topic_id=(
-                        bush_destination
-                        .message_thread_id
-                    ),
-                    message_text=message_text,
-                    snapshot_json=snapshot,
+                if bush_destination is None:
+                    preparation_errors.append(
+                        (
+                            f"{getattr(bush, 'name', f'Кущ #{bush.id}')}: "
+                            "не налаштована Telegram-група"
+                        )
+                    )
+                    continue
+
+                (
+                    message_text,
+                    snapshot,
+                ) = (
+                    await self.build_bush_summary(
+                        bush=bush,
+                        business_date=business_date,
+                        timezone_name=(
+                            resolved_timezone
+                        ),
+                    )
                 )
-            )
 
-            decisions.append(decision)
+                topic_id = (
+                    bush_destination
+                    .message_thread_id
+                    or
+                    self.get_bush_closing_topic_id(
+                        bush
+                    )
+                )
+
+                decision = (
+                    await self.repositories
+                    .daily_summaries
+                    .prepare_update(
+                        summary_type=(
+                            bush_summary_type
+                        ),
+                        business_date=(
+                            business_date
+                        ),
+                        chat_id=(
+                            bush_destination.chat_id
+                        ),
+                        bush_id=bush.id,
+                        topic_id=topic_id,
+                        message_text=message_text,
+                        snapshot_json=snapshot,
+                    )
+                )
+
+                decisions.append(
+                    decision
+                )
+
+            except Exception as error:
+                if bush is not None:
+                    bush_name = str(
+                        getattr(
+                            bush,
+                            "name",
+                            f"Кущ #{bush_id}",
+                        )
+                    )
+                else:
+                    bush_name = (
+                        f"Кущ #{bush_id}"
+                    )
+
+                preparation_errors.append(
+                    (
+                        f"{bush_name}: "
+                        f"{type(error).__name__}: "
+                        f"{error}"
+                    )[:300]
+                )
+
+        if not include_network:
+            return decisions
 
         network_summary_type = (
             self.resolve_summary_type(
@@ -1743,17 +1794,26 @@ class ClosingService:
             )
         )
 
-        network_text, network_snapshot = (
+        (
+            network_text,
+            network_snapshot,
+        ) = (
             await self.build_network_summary(
                 business_date=business_date,
-                timezone_name=resolved_timezone,
+                timezone_name=(
+                    resolved_timezone
+                ),
+                preparation_errors=(
+                    preparation_errors
+                ),
             )
         )
 
         network_destination = (
-            await self.groups.resolve_destination(
+            await self.groups
+            .resolve_destination(
                 topic=(
-                    TelegramGroupTopic.SUMMARIES
+                    TelegramGroupTopic.GENERAL
                 ),
                 bush_id=None,
                 fallback_to_network=True,
@@ -1770,15 +1830,14 @@ class ClosingService:
                 summary_type=(
                     network_summary_type
                 ),
-                business_date=business_date,
+                business_date=(
+                    business_date
+                ),
                 chat_id=(
                     network_destination.chat_id
                 ),
                 bush_id=None,
-                topic_id=(
-                    network_destination
-                    .message_thread_id
-                ),
+                topic_id=None,
                 message_text=network_text,
                 snapshot_json=(
                     network_snapshot
@@ -1786,7 +1845,9 @@ class ClosingService:
             )
         )
 
-        decisions.append(network_decision)
+        decisions.append(
+            network_decision
+        )
 
         return decisions
 
@@ -1795,30 +1856,34 @@ class ClosingService:
         *,
         business_date: date,
         timezone_name: str | None = None,
+        include_network: bool = True,
     ) -> list[SummaryUpdateDecision]:
-        """Готує підсумки всіх активних кущів."""
+        """
+        Готує підсумки всіх
+        активних кущів.
+        """
 
-        statement = (
+        result = await self.session.scalars(
             select(Bush.id)
             .where(
                 Bush.is_active.is_(True)
             )
-            .order_by(Bush.id.asc())
-        )
-
-        result = await self.session.scalars(
-            statement
+            .order_by(
+                Bush.id.asc()
+            )
         )
 
         bush_ids = {
             int(bush_id)
-            for bush_id in result.all()
+            for bush_id
+            in result.all()
         }
 
         return await self.prepare_summary_updates(
             business_date=business_date,
             bush_ids=bush_ids,
             timezone_name=timezone_name,
+            include_network=include_network,
         )
 
     async def build_bush_summary(
@@ -1974,39 +2039,377 @@ class ClosingService:
 
         return "\n".join(lines), snapshot
 
+    async def build_network_closing_diagnostics(
+        self,
+        *,
+        business_date: date,
+        timezone_name: str,
+        preparation_errors: list[str] | None = None,
+    ) -> tuple[list[str], dict[str, Any]]:
+        """
+        Діагностика вечірнього
+        підрахунку по кущах.
+        """
+
+        result = await self.session.scalars(
+            select(Bush)
+            .where(
+                Bush.is_active.is_(True)
+            )
+            .order_by(
+                Bush.id.asc()
+            )
+        )
+
+        bushes = list(
+            result.unique().all()
+        )
+
+        lines = [
+            (
+                "🌿 <b>Підрахунок по кущах "
+                f"({len(bushes)}):</b>"
+            )
+        ]
+
+        checks: list[
+            dict[str, Any]
+        ] = []
+
+        for bush in bushes:
+            name = str(
+                getattr(
+                    bush,
+                    "name",
+                    f"Кущ №{bush.id}",
+                )
+            )
+
+            try:
+                stats = (
+                    await self.repositories
+                    .closings
+                    .get_daily_statistics(
+                        business_date=(
+                            business_date
+                        ),
+                        bush_id=bush.id,
+                    )
+                )
+
+                expected = int(
+                    stats[
+                        "expected_count"
+                    ]
+                )
+
+                submitted = int(
+                    stats[
+                        "submitted_count"
+                    ]
+                )
+
+                waiting = int(
+                    stats[
+                        "waiting_count"
+                    ]
+                )
+
+                missed = int(
+                    stats[
+                        "missed_count"
+                    ]
+                )
+
+                missing = max(
+                    expected - submitted,
+                    0,
+                )
+
+                issues: list[str] = []
+
+                destination = (
+                    await self.groups
+                    .resolve_destination(
+                        topic=(
+                            TelegramGroupTopic
+                            .SUMMARIES
+                        ),
+                        bush_id=bush.id,
+                        fallback_to_network=False,
+                    )
+                )
+
+                if expected == 0:
+                    issues.append(
+                        "немає записів "
+                        "для підрахунку"
+                    )
+
+                if destination is None:
+                    issues.append(
+                        "не налаштована "
+                        "Telegram-група"
+                    )
+
+                elif (
+                    destination.message_thread_id
+                    is None
+                    and
+                    self.get_bush_closing_topic_id(
+                        bush
+                    )
+                    is None
+                ):
+                    issues.append(
+                        "немає topic_id"
+                    )
+
+                if waiting:
+                    issues.append(
+                        f"очікуємо {waiting}"
+                    )
+
+                if missed:
+                    issues.append(
+                        f"не подано {missed}"
+                    )
+
+                if expected == 0:
+                    icon = "⚠️"
+
+                elif missing == 0:
+                    icon = "✅"
+
+                elif waiting:
+                    icon = "⌛"
+
+                else:
+                    icon = "🚨"
+
+                suffix = (
+                    (
+                        " | "
+                        + "; ".join(
+                            issues
+                        )
+                    )
+                    if issues
+                    else ""
+                )
+
+                lines.append(
+                    f"{icon} "
+                    f"<b>{escape(name)}</b>: "
+                    f"{submitted}/{expected}"
+                    f"{escape(suffix)}"
+                )
+
+                checks.append(
+                    {
+                        "bush_id": bush.id,
+                        "name": name,
+                        "expected": expected,
+                        "submitted": submitted,
+                        "waiting": waiting,
+                        "missed": missed,
+                        "issues": issues,
+                    }
+                )
+
+            except Exception as error:
+                error_text = (
+                    f"{type(error).__name__}: "
+                    f"{error}"
+                )[:240]
+
+                lines.append(
+                    "❌ "
+                    f"<b>{escape(name)}</b>: "
+                    f"{escape(error_text)}"
+                )
+
+                checks.append(
+                    {
+                        "bush_id": bush.id,
+                        "name": name,
+                        "error": error_text,
+                    }
+                )
+
+        summaries = (
+            await self.repositories
+            .daily_summaries
+            .get_for_date(
+                business_date=(
+                    business_date
+                ),
+                summary_types={
+                    SummaryType.BUSH_CLOSING,
+                },
+            )
+        )
+
+        sync_errors = [
+            (
+                f"Кущ #{summary.bush_id}: "
+                f"{str(summary.error_text)[:240]}"
+            )
+            for summary
+            in summaries
+            if getattr(
+                summary,
+                "error_text",
+                None,
+            )
+        ]
+
+        if preparation_errors:
+            lines.extend(
+                [
+                    "",
+                    (
+                        "❌ <b>Помилки "
+                        "підготовки кущів:</b>"
+                    ),
+                    *[
+                        f"• {escape(error)}"
+                        for error
+                        in preparation_errors[:8]
+                    ],
+                ]
+            )
+
+        if sync_errors:
+            lines.extend(
+                [
+                    "",
+                    (
+                        "❌ <b>Помилки "
+                        "Telegram-підсумків:</b>"
+                    ),
+                    *[
+                        f"• {escape(error)}"
+                        for error
+                        in sync_errors[:8]
+                    ],
+                ]
+            )
+
+        waiting_reports = (
+            await self.repositories
+            .closings
+            .get_waiting_for_date(
+                business_date=(
+                    business_date
+                )
+            )
+        )
+
+        waiting_lines = (
+            await self.build_report_lines(
+                waiting_reports,
+                timezone_name=(
+                    timezone_name
+                ),
+            )
+        )
+
+        if waiting_lines:
+            lines.extend(
+                [
+                    "",
+                    (
+                        "⌛ <b>Ще не подали "
+                        "звіт:</b>"
+                    ),
+                    *waiting_lines[:12],
+                ]
+            )
+
+        return (
+            lines,
+            {
+                "bush_checks": checks,
+                "preparation_errors": (
+                    preparation_errors
+                    or []
+                ),
+                "summary_sync_errors": (
+                    sync_errors
+                ),
+                "waiting_report_ids": [
+                    report.id
+                    for report
+                    in waiting_reports
+                ],
+            },
+        )
+
     async def build_network_summary(
         self,
         *,
         business_date: date,
         timezone_name: str,
+        preparation_errors: list[str] | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """Формує вечірній підсумок усієї мережі."""
+        """
+        Формує вечірній підсумок
+        усієї мережі.
+        """
 
         statistics = (
-            await self.repositories.closings
+            await self.repositories
+            .closings
             .get_daily_statistics(
-                business_date=business_date
+                business_date=(
+                    business_date
+                )
             )
         )
 
         problem_reports = (
-            await self.repositories.closings
+            await self.repositories
+            .closings
             .get_problem_reports(
-                business_date=business_date
+                business_date=(
+                    business_date
+                )
             )
         )
 
         problem_lines = (
             await self.build_report_lines(
                 problem_reports,
-                timezone_name=timezone_name,
+                timezone_name=(
+                    timezone_name
+                ),
+            )
+        )
+
+        (
+            diagnostic_lines,
+            diagnostic_snapshot,
+        ) = (
+            await self
+            .build_network_closing_diagnostics(
+                business_date=(
+                    business_date
+                ),
+                timezone_name=(
+                    timezone_name
+                ),
+                preparation_errors=(
+                    preparation_errors
+                ),
             )
         )
 
         lines = [
             "🌙 <b>Закриття всієї мережі</b>",
             (
-                f"📅 {business_date.strftime('%d.%m.%Y')}"
+                f"📅 "
+                f"{business_date.strftime('%d.%m.%Y')}"
             ),
             "",
             (
@@ -2056,43 +2459,62 @@ class ClosingService:
             ),
         ]
 
+        if diagnostic_lines:
+            lines.extend(
+                [
+                    "",
+                    *diagnostic_lines,
+                ]
+            )
+
         if problem_lines:
             lines.extend(
                 [
                     "",
                     "⚠️ <b>Проблемні ТТ:</b>",
-                    *problem_lines[:30],
+                    *problem_lines[:15],
                 ]
             )
 
         snapshot = {
             **statistics,
             "total_cash": str(
-                statistics["total_cash"]
+                statistics[
+                    "total_cash"
+                ]
             ),
             "average_cash": str(
-                statistics["average_cash"]
+                statistics[
+                    "average_cash"
+                ]
             ),
             "maximum_cash": str(
-                statistics["maximum_cash"]
+                statistics[
+                    "maximum_cash"
+                ]
             ),
             "minimum_cash": str(
-                statistics["minimum_cash"]
+                statistics[
+                    "minimum_cash"
+                ]
             ),
             "business_date": (
                 business_date.isoformat()
             ),
             "problem_report_ids": [
                 report.id
-                for report in problem_reports
+                for report
+                in problem_reports
             ],
+            "diagnostics": (
+                diagnostic_snapshot
+            ),
         }
 
-        return "\n".join(lines), snapshot
-
-    # ==========================================
-    # РЯДКИ ТОРГОВИХ ТОЧОК
-    # ==========================================
+        return (
+            "\n".join(lines),
+            snapshot,
+        )
 
     async def build_report_lines(
         self,

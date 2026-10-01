@@ -24,6 +24,7 @@ from app.scheduler.notification_jobs import (
 from app.scheduler.summary_jobs import (
     process_opening_summaries_job,
     process_closing_summaries_job,
+    final_closing_recount_job,
     recover_pending_summaries_job,
 )
 
@@ -61,6 +62,7 @@ __all__ = [
     # summaries
     "process_opening_summaries_job",
     "process_closing_summaries_job",
+    "final_closing_recount_job",
     "recover_pending_summaries_job",
 
     # cleanup

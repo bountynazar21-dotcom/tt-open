@@ -4,6 +4,7 @@ import logging
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import settings
@@ -22,6 +23,7 @@ from app.scheduler.opening_jobs import (
     refresh_opening_summaries_job,
 )
 from app.scheduler.summary_jobs import (
+    final_closing_recount_job,
     process_closing_summaries_job,
     process_opening_summaries_job,
     recover_pending_summaries_job,
@@ -211,6 +213,26 @@ def create_scheduler(
         coalesce=True,
         max_instances=1,
         misfire_grace_time=120,
+    )
+
+    scheduler.add_job(
+        final_closing_recount_job,
+        trigger=CronTrigger(
+            hour=22,
+            minute=22,
+            timezone=settings.timezone,
+        ),
+        kwargs={
+            "bot": bot,
+        },
+        id="final_closing_recount_2222",
+        name=(
+            "Final closing recount at 22:22"
+        ),
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=900,
     )
 
     scheduler.add_job(
