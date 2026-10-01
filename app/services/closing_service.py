@@ -744,18 +744,25 @@ class ClosingService:
         для Telegram-групи закриттів.
         """
 
-        network_group = (
-            await self.groups.get_network_group()
-        )
-
-        if network_group is None:
-            return None, False
-
         bush = await self.get_store_bush(
             store
         )
 
-        if bush is None:
+        if bush is None or store.bush_id is None:
+            return None, False
+
+        target_group = (
+            await self.groups.get_bush_group(
+                store.bush_id
+            )
+        )
+
+        if target_group is None:
+            target_group = (
+                await self.groups.get_network_group()
+            )
+
+        if target_group is None:
             return None, False
 
         topic_id = getattr(
@@ -767,7 +774,7 @@ class ClosingService:
         if topic_id is None:
             return None, False
 
-        group_id = network_group.chat_id
+        group_id = target_group.chat_id
 
         notification_type = (
             NotificationType.CLOSING_SUMMARY

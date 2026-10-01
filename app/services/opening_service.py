@@ -1183,6 +1183,26 @@ class OpeningService:
                 bush
             )
 
+            bush_group_id = (
+                await self.repositories.settings
+                .get_int(
+                    (
+                        "telegram_groups_bush_"
+                        f"{bush.id}_chat_id"
+                    ),
+                    default=None,
+                )
+            )
+
+            target_chat_id = (
+                bush_group_id
+                if bush_group_id is not None
+                else control_group_id
+            )
+
+            if target_chat_id is None:
+                continue
+
             decision = (
                 await self.repositories
                 .daily_summaries
@@ -1193,7 +1213,7 @@ class OpeningService:
                     business_date=(
                         business_date
                     ),
-                    chat_id=control_group_id,
+                    chat_id=target_chat_id,
                     bush_id=bush.id,
                     topic_id=topic_id,
                     message_text=message_text,
