@@ -202,7 +202,7 @@ def create_scheduler(
     scheduler.add_job(
         process_closing_summaries_job,
         trigger=IntervalTrigger(
-            minutes=1,
+            minutes=3,
         ),
         kwargs={
             "bot": bot,

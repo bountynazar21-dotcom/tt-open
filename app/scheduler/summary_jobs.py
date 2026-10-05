@@ -71,6 +71,7 @@ async def _sync_closing_summaries_in_order(
                 settings.timezone
             ),
             include_network=True,
+            include_diagnostics=True,
         )
     )
 
@@ -187,97 +188,72 @@ async def process_closing_summaries_job(
     *,
     bot: Bot,
 ) -> None:
-    """
-    Спочатку синхронізує всі кущі,
-    потім загальний звіт мережі.
-    """
+    """Lightweight live closing summary."""
 
     async with async_session_factory() as session:
         try:
-            acquired = (
-                await try_scheduler_lock(
-                    session,
-                    lock_id=(
-                        settings.scheduler_lock_id
-                        + 402
-                    ),
-                )
+            acquired = await try_scheduler_lock(
+                session,
+                lock_id=(
+                    settings.scheduler_lock_id
+                    + 402
+                ),
             )
 
             if not acquired:
-                logger.debug(
-                    "process_closing_summaries_job "
-                    "skipped: scheduler lock "
-                    "already held"
-                )
                 return
 
-            repositories = Repositories(
-                session
-            )
+            repositories = Repositories(session)
 
             services = create_services(
                 repositories,
                 bot=bot,
-                bot_username=(
-                    settings.bot_username
-                ),
+                bot_username=settings.bot_username,
             )
 
             current_time = now_local()
 
-            (
-                bush_result,
-                network_result,
-            ) = (
-                await
-                _sync_closing_summaries_in_order(
-                    services=services,
-                    business_date=(
-                        current_time.date()
-                    ),
+            # Live mode:
+            # network only, no all-bush recount,
+            # no bush diagnostics.
+            decisions = (
+                await services.closing
+                .prepare_summary_updates(
+                    business_date=current_time.date(),
+                    bush_ids=set(),
+                    timezone_name=settings.timezone,
+                    include_network=True,
+                    include_diagnostics=False,
+                )
+            )
+
+            if not decisions:
+                await session.commit()
+                return
+
+            result = (
+                await services.summaries
+                .sync_decisions(
+                    decisions,
+                    commit_each=True,
                 )
             )
 
             await session.commit()
 
             logger.info(
-                "Closing summaries synced "
-                "in order | "
-                "date=%s bushes=%s "
-                "bush_failed=%s "
-                "network=%s "
-                "network_failed=%s",
+                "Closing lightweight live summary | "
+                "date=%s total=%s failed=%s",
                 current_time.date(),
-                (
-                    bush_result.total_count
-                    if bush_result
-                    else 0
-                ),
-                (
-                    bush_result.failed_count
-                    if bush_result
-                    else 0
-                ),
-                (
-                    network_result.total_count
-                    if network_result
-                    else 0
-                ),
-                (
-                    network_result.failed_count
-                    if network_result
-                    else 0
-                ),
+                result.total_count,
+                result.failed_count,
             )
 
         except Exception:
             await session.rollback()
-
             logger.exception(
                 "process_closing_summaries_job failed"
             )
-
             raise
 
 

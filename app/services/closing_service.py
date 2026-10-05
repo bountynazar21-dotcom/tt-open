@@ -1611,6 +1611,7 @@ class ClosingService:
         bush_ids: set[int] | None = None,
         timezone_name: str | None = None,
         include_network: bool = True,
+        include_diagnostics: bool = False,
     ) -> list[SummaryUpdateDecision]:
         """
         Готує вечірні підсумки.
@@ -1805,6 +1806,9 @@ class ClosingService:
                 ),
                 preparation_errors=(
                     preparation_errors
+                ),
+                include_diagnostics=(
+                    include_diagnostics
                 ),
             )
         )
@@ -2352,6 +2356,7 @@ class ClosingService:
         business_date: date,
         timezone_name: str,
         preparation_errors: list[str] | None = None,
+        include_diagnostics: bool = False,
     ) -> tuple[str, dict[str, Any]]:
         """
         Формує вечірній підсумок
@@ -2387,23 +2392,22 @@ class ClosingService:
             )
         )
 
-        (
-            diagnostic_lines,
-            diagnostic_snapshot,
-        ) = (
-            await self
-            .build_network_closing_diagnostics(
-                business_date=(
-                    business_date
-                ),
-                timezone_name=(
-                    timezone_name
-                ),
-                preparation_errors=(
-                    preparation_errors
-                ),
+        if include_diagnostics:
+            (
+                diagnostic_lines,
+                diagnostic_snapshot,
+            ) = (
+                await self.build_network_closing_diagnostics(
+                    business_date=business_date,
+                    timezone_name=timezone_name,
+                    preparation_errors=preparation_errors,
+                )
             )
-        )
+        else:
+            diagnostic_lines = []
+            diagnostic_snapshot = {
+                "mode": "lightweight_live",
+            }
 
         lines = [
             "🌙 <b>Закриття всієї мережі</b>",
