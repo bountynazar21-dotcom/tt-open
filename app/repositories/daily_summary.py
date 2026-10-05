@@ -204,17 +204,17 @@ class DailySummaryRepository(
         statement = (
             select(DailySummaryMessage)
             .where(*conditions)
+            .options(
+                lazyload(
+                    DailySummaryMessage.bush
+                )
+            )
             .limit(1)
         )
 
         if for_update:
             statement = (
                 statement
-                .options(
-                    lazyload(
-                        DailySummaryMessage.bush
-                    )
-                )
                 .with_for_update(
                     of=DailySummaryMessage
                 )

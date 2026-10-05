@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 
+from sqlalchemy.orm import lazyload
+
 from app.database.models.bush import Bush
 from app.database.models.closing_report import ClosingReport
 from app.database.models.enums import (
@@ -1685,6 +1687,10 @@ class ClosingService:
                 bush = await self.session.get(
                     Bush,
                     bush_id,
+                    options=(
+                        lazyload(Bush.stores),
+                        lazyload(Bush.user_bindings),
+                    ),
                 )
 
                 if bush is None:
@@ -2057,6 +2063,10 @@ class ClosingService:
 
         result = await self.session.scalars(
             select(Bush)
+            .options(
+                lazyload(Bush.stores),
+                lazyload(Bush.user_bindings),
+            )
             .where(
                 Bush.is_active.is_(True)
             )
@@ -2132,17 +2142,30 @@ class ClosingService:
 
                 issues: list[str] = []
 
-                destination = (
-                    await self.groups
-                    .resolve_destination(
-                        topic=(
-                            TelegramGroupTopic
-                            .SUMMARIES
-                        ),
-                        bush_id=bush.id,
-                        fallback_to_network=False,
+                bush_chat_id = (
+                    await self.groups.get_int_setting(
+                        self.groups.chat_id_key(
+                            scope=TelegramGroupScope.BUSH,
+                            bush_id=bush.id,
+                        )
                     )
                 )
+
+                bush_summary_thread_id = None
+
+                if bush_chat_id is not None:
+                    bush_summary_thread_id = (
+                        await self.groups.get_int_setting(
+                            self.groups.thread_key(
+                                scope=TelegramGroupScope.BUSH,
+                                bush_id=bush.id,
+                                topic=(
+                                    TelegramGroupTopic
+                                    .SUMMARIES
+                                ),
+                            )
+                        )
+                    )
 
                 if expected == 0:
                     issues.append(
@@ -2150,15 +2173,13 @@ class ClosingService:
                         "для підрахунку"
                     )
 
-                if destination is None:
+                if bush_chat_id is None:
                     issues.append(
-                        "не налаштована "
-                        "Telegram-група"
+                        "не налаштована Telegram-група"
                     )
 
                 elif (
-                    destination.message_thread_id
-                    is None
+                    bush_summary_thread_id is None
                     and
                     self.get_bush_closing_topic_id(
                         bush
@@ -3005,6 +3026,14 @@ class ClosingService:
 
         statement = (
             select(Store)
+            .options(
+                lazyload(Store.bush),
+                lazyload(Store.cluster),
+                lazyload(Store.deactivated_by),
+                lazyload(Store.user_bindings),
+                lazyload(Store.schedules),
+                lazyload(Store.schedule_exceptions),
+            )
             .where(
                 Store.id.in_(store_ids)
             )

@@ -1057,6 +1057,7 @@ class ClosingRepository(
         bush_id: int | None = None,
         cluster_id: int | None = None,
         submitted_only: bool | None = None,
+        lightweight: bool = False,
     ) -> list[ClosingReport]:
         """Повертає вечірні звіти за фільтрами."""
 
@@ -1094,6 +1095,13 @@ class ClosingRepository(
                 Store.store_number.asc()
             )
         )
+
+        if lightweight:
+            statement = statement.options(
+                lazyload(ClosingReport.store),
+                lazyload(ClosingReport.submitted_by),
+                lazyload(ClosingReport.manually_modified_by),
+            )
 
         if bush_id is not None:
             statement = statement.where(
@@ -1183,6 +1191,7 @@ class ClosingRepository(
             bush_id=bush_id,
             cluster_id=cluster_id,
             submitted_only=False,
+            lightweight=True,
         )
 
     async def get_missed_for_date(
@@ -1225,6 +1234,7 @@ class ClosingRepository(
             ),
             bush_id=bush_id,
             cluster_id=cluster_id,
+            lightweight=True,
         )
 
     async def get_store_history(
