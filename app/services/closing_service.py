@@ -1614,6 +1614,7 @@ class ClosingService:
         timezone_name: str | None = None,
         include_network: bool = True,
         include_diagnostics: bool = False,
+        force: bool = False,
     ) -> list[SummaryUpdateDecision]:
         """
         Готує вечірні підсумки.
@@ -1640,9 +1641,12 @@ class ClosingService:
             )
         )
 
+        if not summaries_enabled:
+            return []
+
         if (
-            not summaries_enabled
-            or not live_updates_enabled
+            not live_updates_enabled
+            and not force
         ):
             return []
 
@@ -1867,6 +1871,7 @@ class ClosingService:
         business_date: date,
         timezone_name: str | None = None,
         include_network: bool = True,
+        force: bool = False,
     ) -> list[SummaryUpdateDecision]:
         """
         Готує підсумки всіх
@@ -1894,6 +1899,7 @@ class ClosingService:
             bush_ids=bush_ids,
             timezone_name=timezone_name,
             include_network=include_network,
+            force=force,
         )
 
     async def build_bush_summary(

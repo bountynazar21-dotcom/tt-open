@@ -46,6 +46,7 @@ async def _sync_closing_summaries_in_order(
                 settings.timezone
             ),
             include_network=False,
+            force=True,
         )
     )
 
@@ -72,6 +73,7 @@ async def _sync_closing_summaries_in_order(
             ),
             include_network=True,
             include_diagnostics=True,
+            force=True,
         )
     )
 
@@ -264,10 +266,10 @@ async def final_closing_recount_job(
     """
     Контрольний перерахунок о 22:22.
 
-    Якщо хоча б одна ТТ не здала звіт:
+    Фінальний контрольний перерахунок:
     - обробляємо дедлайни;
-    - перераховуємо всі кущі;
-    - після цього мережу.
+    - перераховуємо всі кущі по фактично зданих ТТ;
+    - після цього завжди перераховуємо мережу.
     """
 
     async with async_session_factory() as session:
@@ -277,7 +279,7 @@ async def final_closing_recount_job(
                     session,
                     lock_id=(
                         settings.scheduler_lock_id
-                        + 402
+                        + 404
                     ),
                 )
             )
@@ -357,20 +359,6 @@ async def final_closing_recount_job(
                 expected - submitted,
                 0,
             )
-
-            if missing == 0:
-                await session.commit()
-
-                logger.info(
-                    "22:22 recount not needed | "
-                    "date=%s expected=%s "
-                    "submitted=%s",
-                    business_date,
-                    expected,
-                    submitted,
-                )
-
-                return
 
             (
                 bush_result,
