@@ -925,6 +925,9 @@ class DailySummaryRepository(
 
         statement = (
             select(DailySummaryMessage)
+            .options(
+                lazyload(DailySummaryMessage.bush),
+            )
             .where(*conditions)
             .order_by(
                 DailySummaryMessage.summary_type.asc(),

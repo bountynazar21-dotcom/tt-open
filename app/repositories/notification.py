@@ -1094,6 +1094,11 @@ class NotificationRepository(
 
         statement = (
             select(NotificationLog)
+            .options(
+                lazyload(NotificationLog.recipient_user),
+                lazyload(NotificationLog.store),
+                lazyload(NotificationLog.bush),
+            )
             .where(*conditions)
             .order_by(
                 NotificationLog
@@ -1146,6 +1151,11 @@ class NotificationRepository(
 
         statement = (
             select(NotificationLog)
+            .options(
+                lazyload(NotificationLog.recipient_user),
+                lazyload(NotificationLog.store),
+                lazyload(NotificationLog.bush),
+            )
             .where(*conditions)
             .order_by(
                 NotificationLog
@@ -1269,6 +1279,11 @@ class NotificationRepository(
 
         statement = (
             select(NotificationLog)
+            .options(
+                lazyload(NotificationLog.recipient_user),
+                lazyload(NotificationLog.store),
+                lazyload(NotificationLog.bush),
+            )
             .where(*conditions)
             .order_by(
                 NotificationLog.created_at.desc(),

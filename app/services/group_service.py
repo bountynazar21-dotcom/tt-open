@@ -13,6 +13,7 @@ from aiogram.exceptions import (
 )
 from aiogram.types import Message
 from sqlalchemy import select
+from sqlalchemy.orm import lazyload
 
 from app.database.models.enums import (
     AuditAction,
@@ -869,7 +870,7 @@ class GroupService:
         bush_id: int | None,
     ) -> GroupBindingView | None:
         """
-        Читає повну конфігурацію групи.
+        Читає повну конфігурацію групи одним SQL-запитом.
         """
 
         self.validate_scope(
@@ -877,95 +878,111 @@ class GroupService:
             bush_id=bush_id,
         )
 
-        chat_id = await self.get_int_setting(
-            self.chat_id_key(
-                scope=scope,
-                bush_id=bush_id,
+        chat_key = self.chat_id_key(
+            scope=scope,
+            bush_id=bush_id,
+        )
+
+        title_key = self.title_key(
+            scope=scope,
+            bush_id=bush_id,
+        )
+
+        opening_key = self.thread_key(
+            scope=scope,
+            bush_id=bush_id,
+            topic=TelegramGroupTopic.OPENING,
+        )
+
+        closing_key = self.thread_key(
+            scope=scope,
+            bush_id=bush_id,
+            topic=TelegramGroupTopic.CLOSING,
+        )
+
+        alerts_key = self.thread_key(
+            scope=scope,
+            bush_id=bush_id,
+            topic=TelegramGroupTopic.ALERTS,
+        )
+
+        summaries_key = self.thread_key(
+            scope=scope,
+            bush_id=bush_id,
+            topic=TelegramGroupTopic.SUMMARIES,
+        )
+
+        keys = {
+            chat_key,
+            title_key,
+            opening_key,
+            closing_key,
+            alerts_key,
+            summaries_key,
+        }
+
+        statement = (
+            select(SystemSetting)
+            .options(
+                lazyload(SystemSetting.updated_by),
+            )
+            .where(
+                SystemSetting.key.in_(keys)
             )
         )
+
+        result = await self.session.scalars(
+            statement
+        )
+
+        settings_map = {
+            setting.key: self.setting_value(setting)
+            for setting in result.unique().all()
+        }
+
+        def as_string(
+            key: str,
+        ) -> str | None:
+            value = settings_map.get(key)
+
+            if value is None:
+                return None
+
+            normalized = str(value).strip()
+
+            return normalized or None
+
+        def as_int(
+            key: str,
+        ) -> int | None:
+            value = as_string(key)
+
+            if value is None:
+                return None
+
+            try:
+                return int(value)
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                return None
+
+        chat_id = as_int(chat_key)
 
         if chat_id is None:
             return None
 
-        title = (
-            await self.get_string_setting(
-                self.title_key(
-                    scope=scope,
-                    bush_id=bush_id,
-                )
-            )
-        )
-
-        opening_thread_id = (
-            await self.get_int_setting(
-                self.thread_key(
-                    scope=scope,
-                    bush_id=bush_id,
-                    topic=(
-                        TelegramGroupTopic
-                        .OPENING
-                    ),
-                )
-            )
-        )
-
-        closing_thread_id = (
-            await self.get_int_setting(
-                self.thread_key(
-                    scope=scope,
-                    bush_id=bush_id,
-                    topic=(
-                        TelegramGroupTopic
-                        .CLOSING
-                    ),
-                )
-            )
-        )
-
-        alerts_thread_id = (
-            await self.get_int_setting(
-                self.thread_key(
-                    scope=scope,
-                    bush_id=bush_id,
-                    topic=(
-                        TelegramGroupTopic
-                        .ALERTS
-                    ),
-                )
-            )
-        )
-
-        summaries_thread_id = (
-            await self.get_int_setting(
-                self.thread_key(
-                    scope=scope,
-                    bush_id=bush_id,
-                    topic=(
-                        TelegramGroupTopic
-                        .SUMMARIES
-                    ),
-                )
-            )
-        )
-
         return GroupBindingView(
             scope=scope,
             chat_id=chat_id,
-            title=title,
+            title=as_string(title_key),
             bush_id=bush_id,
-
-            opening_thread_id=(
-                opening_thread_id
-            ),
-            closing_thread_id=(
-                closing_thread_id
-            ),
-            alerts_thread_id=(
-                alerts_thread_id
-            ),
-            summaries_thread_id=(
-                summaries_thread_id
-            ),
+            opening_thread_id=as_int(opening_key),
+            closing_thread_id=as_int(closing_key),
+            alerts_thread_id=as_int(alerts_key),
+            summaries_thread_id=as_int(summaries_key),
         )
 
     # ==========================================
