@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from html import escape
 from typing import Any
 
@@ -13,6 +16,10 @@ from aiogram.types import (
     Message,
 )
 
+from sqlalchemy import select
+
+from app.config import settings
+from app.database.models.bush import Bush
 from app.database.models.user import (
     User as DatabaseUser,
 )
@@ -83,6 +90,9 @@ GROUP_MANAGER_ROLES = {
 NETWORK_MANAGER_ROLES = {
     "ROOT_ADMIN",
 }
+
+
+CLOSING_TOTAL_LOCK = asyncio.Lock()
 
 
 TOPIC_TYPES = {
@@ -1584,6 +1594,246 @@ async def group_status_command(
             data=data,
         )
     )
+
+
+
+
+# =========================================================
+# /CLOSING_TOTAL
+# =========================================================
+
+
+@router.message(
+    Command("closing_total"),
+    F.chat.type.in_(GROUP_CHAT_TYPES),
+)
+async def closing_total_command(
+    message: Message,
+    **data: Any,
+) -> None:
+    """
+    Ручний підсумок закриття.
+
+    /closing_total
+    /closing_total 2026-10-07
+    """
+
+    group_service = get_group_service(data)
+
+    closing_service = get_service(
+        data,
+        "closing",
+        "closings",
+    )
+
+    if group_service is None or closing_service is None:
+        await message.answer(
+            "⚠️ Сервіс тимчасово недоступний."
+        )
+        return
+
+    network_group = (
+        await group_service.get_network_group()
+    )
+
+    if network_group is None:
+        await message.answer(
+            "⚠️ Головна група мережі не налаштована."
+        )
+        return
+
+    if message.chat.id != network_group.chat_id:
+        await message.answer(
+            "⛔ Команда працює лише "
+            "в головній групі мережі."
+        )
+        return
+
+    parts = (message.text or "").strip().split(
+        maxsplit=1
+    )
+
+    if len(parts) == 2:
+        try:
+            business_date = date.fromisoformat(
+                parts[1].strip()
+            )
+        except ValueError:
+            await message.answer(
+                "⚠️ Формат дати:\n"
+                "<code>/closing_total 2026-10-07</code>"
+            )
+            return
+    else:
+        business_date = datetime.now(
+            ZoneInfo(settings.timezone)
+        ).date()
+
+    if CLOSING_TOTAL_LOCK.locked():
+        await message.answer(
+            "⏳ Підсумок уже рахується."
+        )
+        return
+
+    async with CLOSING_TOTAL_LOCK:
+        wait_message = await message.answer(
+            "⏳ Рахую підсумок закриття..."
+        )
+
+        try:
+            result = await closing_service.session.execute(
+                select(
+                    Bush.id,
+                    Bush.name,
+                )
+                .where(
+                    Bush.is_active.is_(True)
+                )
+                .order_by(
+                    Bush.id.asc()
+                )
+            )
+
+            bushes = list(result.all())
+
+            lines = [
+                "🌙 <b>Підсумок закриття</b>",
+                (
+                    "📅 <b>"
+                    + business_date.strftime("%d.%m.%Y")
+                    + "</b>"
+                ),
+                "",
+            ]
+
+            for bush_id, bush_name in bushes:
+                stats = await (
+                    closing_service.repositories
+                    .closings
+                    .get_daily_statistics(
+                        business_date=business_date,
+                        bush_id=bush_id,
+                    )
+                )
+
+                expected = int(
+                    stats["expected_count"]
+                )
+
+                submitted = int(
+                    stats["submitted_count"]
+                )
+
+                missing = max(
+                    expected - submitted,
+                    0,
+                )
+
+                cash = stats["total_cash"]
+
+                name = escape(
+                    str(
+                        bush_name
+                        or f"Кущ №{bush_id}"
+                    )
+                )
+
+                lines.append(
+                    f"🌿 <b>{name}</b>"
+                )
+
+                lines.append(
+                    "💰 "
+                    + closing_service.format_money(
+                        cash
+                    )
+                )
+
+                lines.append(
+                    "✅ Подано: "
+                    f"<b>{submitted}/{expected}</b>"
+                )
+
+                if missing:
+                    lines.append(
+                        "⚠️ Не подано: "
+                        f"<b>{missing}</b>"
+                    )
+
+                lines.append("")
+
+            total_stats = await (
+                closing_service.repositories
+                .closings
+                .get_daily_statistics(
+                    business_date=business_date,
+                )
+            )
+
+            total_expected = int(
+                total_stats["expected_count"]
+            )
+
+            total_submitted = int(
+                total_stats["submitted_count"]
+            )
+
+            total_missing = max(
+                total_expected - total_submitted,
+                0,
+            )
+
+            total_cash = total_stats["total_cash"]
+
+            lines.extend(
+                [
+                    "━━━━━━━━━━━━━━",
+                    (
+                        "💰 <b>ЗАГАЛЬНА КАСА: "
+                        + closing_service.format_money(
+                            total_cash
+                        )
+                        + "</b>"
+                    ),
+                    (
+                        "✅ Подано: "
+                        f"<b>{total_submitted}/"
+                        f"{total_expected}</b>"
+                    ),
+                ]
+            )
+
+            if total_missing:
+                lines.append(
+                    "⚠️ Не подано: "
+                    f"<b>{total_missing}</b>"
+                )
+
+            await message.bot.send_message(
+                chat_id=network_group.chat_id,
+                text="\n".join(lines),
+                parse_mode="HTML",
+            )
+
+            try:
+                await wait_message.delete()
+            except Exception:
+                pass
+
+        except Exception:
+            logger.exception(
+                "Manual closing total failed | "
+                "date=%s chat_id=%s",
+                business_date,
+                message.chat.id,
+            )
+
+            try:
+                await wait_message.edit_text(
+                    "❌ Не вдалося сформувати підсумок."
+                )
+            except Exception:
+                pass
 
 
 # =========================================================
