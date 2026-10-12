@@ -724,48 +724,16 @@ def closing_confirmation_keyboard(
     store_id: int,
 ) -> InlineKeyboardMarkup:
     """
-    Останній крок перед закриттям.
-
-    Handler до цього моменту вже має:
-
-        cash_amount
-        receipt_file_id
+    Final report submission.
     """
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 inline_button(
-                    text="✅ Підтвердити закриття",
+                    text="📤 Надіслати звіт",
                     callback=ClosingCallback(
                         action=ClosingAction.CONFIRM,
-                        store_id=store_id,
-                    ),
-                )
-            ],
-            [
-                inline_button(
-                    text="💵 Змінити касу",
-                    callback=ClosingCallback(
-                        action=ClosingAction.CASH,
-                        store_id=store_id,
-                    ),
-                ),
-            ],
-            [
-                inline_button(
-                    text="📷 Замінити чек",
-                    callback=ClosingCallback(
-                        action=ClosingAction.RECEIPT,
-                        store_id=store_id,
-                    ),
-                ),
-            ],
-            [
-                inline_button(
-                    text="❌ Скасувати",
-                    callback=ClosingCallback(
-                        action=ClosingAction.BACK,
                         store_id=store_id,
                     ),
                 )
@@ -888,25 +856,45 @@ def closing_status_keyboard(
 def closing_success_keyboard(
     *,
     store_id: int,
+    report_id: int = 0,
 ) -> InlineKeyboardMarkup:
     """
-    Після повного закриття ТТ.
+    Actions after report submission.
     """
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows = [
+        [
+            closing_status_button(
+                store_id=store_id,
+                text="📋 Переглянути звіт",
+            )
+        ],
+    ]
+
+    if report_id > 0:
+        rows.append(
             [
-                closing_status_button(
-                    store_id=store_id,
-                    text="📋 Переглянути звіт",
+                inline_button(
+                    text="✏️ Виправити звіт",
+                    callback=CashCallback(
+                        action=CashAction.CORRECT,
+                        store_id=store_id,
+                        report_id=report_id,
+                    ),
                 )
-            ],
-            [
-                home_button(
-                    text="🏠 Головне меню"
-                )
-            ],
+            ]
+        )
+
+    rows.append(
+        [
+            home_button(
+                text="🏠 Головне меню"
+            )
         ]
+    )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
     )
 
 

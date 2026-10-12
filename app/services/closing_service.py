@@ -539,6 +539,7 @@ class ClosingService:
         *,
         user: User,
         store_id: int,
+        report_id: int | None = None,
         current_time: datetime,
         cash_amount: Decimal | int | float | str,
         timezone_name: str | None = None,
@@ -587,11 +588,30 @@ class ClosingService:
             resolved_timezone
         )
 
-        business_date = (
-            current_time
-            .astimezone(timezone)
-            .date()
-        )
+        if report_id is not None:
+            pinned_report = (
+                await self.repositories.closings
+                .get_report_for_update_or_raise(
+                    report_id
+                )
+            )
+
+            if pinned_report.store_id != store.id:
+                raise ValueError(
+                    "Pinned report belongs "
+                    "to another store."
+                )
+
+            business_date = (
+                pinned_report.business_date
+            )
+
+        else:
+            business_date = (
+                current_time
+                .astimezone(timezone)
+                .date()
+            )
 
         _, schedule, _ = (
             await self.prepare_store_report(

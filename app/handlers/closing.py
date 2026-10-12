@@ -1281,6 +1281,7 @@ async def complete_closing(
             {
                 "user": user,
                 "store_id": store_id,
+                "report_id": report_id,
                 "current_time": actual_time,
                 "cash_amount": cash_amount,
                 "receipt_file_id": receipt_file_id,
@@ -2199,6 +2200,47 @@ async def cash_confirm_callback(
         "Зберігаю касу…"
     )
 
+    # CORRECTION CASH ONLY
+    if bool(
+        state_data.get(
+            "closing_correction_mode"
+        )
+    ):
+        await state.update_data(
+            pending_cash_amount=None,
+            closing_cash_amount=str(amount),
+            closing_store_id=store_id,
+            closing_report_id=report_id,
+        )
+
+        await state.set_state(
+            ClosingStates.waiting_receipt
+        )
+
+        await safe_callback_answer(
+            callback,
+            "Касу прийнято.",
+        )
+
+        await safe_edit(
+            callback,
+            text=(
+                "✅ <b>Нову касу "
+                "прийнято.</b>\n\n"
+                "💵 "
+                f"{escape(format_money(amount))}\n\n"
+                "📷 Тепер надішліть "
+                "<b>нове фото чека</b>."
+            ),
+            reply_markup=(
+                receipt_request_keyboard(
+                    store_id=store_id
+                )
+            ),
+        )
+
+        return
+
     try:
         result = await save_cash_amount(
             store_id=store_id,
@@ -2475,6 +2517,72 @@ async def closing_receipt_message(
 
         return
 
+    # CORRECTION RECEIPT ONLY
+    if bool(
+        state_data.get(
+            "closing_correction_mode"
+        )
+    ):
+        raw_amount = state_data.get(
+            "closing_cash_amount"
+        )
+
+        try:
+            amount = Decimal(
+                str(raw_amount)
+            ).quantize(
+                MONEY_QUANT,
+                rounding=ROUND_HALF_UP,
+            )
+        except (
+            InvalidOperation,
+            TypeError,
+            ValueError,
+        ):
+            await message.answer(
+                "❌ Не знайдено "
+                "нову суму каси."
+            )
+            await state.clear()
+            return
+
+        await state.update_data(
+            closing_receipt_file_id=file_id,
+            closing_receipt_file_unique_id=(
+                file_unique_id
+            ),
+            closing_receipt_upload_kind=(
+                upload_kind
+            ),
+            closing_store_id=store_id,
+            closing_report_id=report_id,
+        )
+
+        await state.set_state(None)
+
+        await message.answer(
+            (
+                "✅ <b>Дані для "
+                "виправлення "
+                "зібрано.</b>\n\n"
+                "💵 <b>Каса:</b> "
+                + escape(format_money(amount))
+                + " грн\n"
+                "📸 <b>Чек:</b> "
+                "отримано\n\n"
+                "Натисніть "
+                "«📤 Надіслати "
+                "звіт»."
+            ),
+            reply_markup=(
+                closing_confirmation_keyboard(
+                    store_id=store_id
+                )
+            ),
+        )
+
+        return
+
     try:
         result = await save_receipt(
             store_id=store_id,
@@ -2644,8 +2752,13 @@ async def closing_status_callback(
         result
     ):
         markup = (
-            closing_already_done_keyboard(
-                store_id=store_id
+            closing_success_keyboard(
+                store_id=store_id,
+                report_id=(
+                    result_report_id(
+                        result
+                    )
+                ),
             )
         )
 
@@ -2685,6 +2798,95 @@ async def closing_status_callback(
         callback,
         text=text,
         reply_markup=markup,
+    )
+
+
+# =========================================================
+# CORRECT SUBMITTED REPORT
+# =========================================================
+
+
+@router.callback_query(
+    CashCallback.filter(
+        F.action == CashAction.CORRECT
+    )
+)
+async def closing_report_correct_callback(
+    callback: CallbackQuery,
+    callback_data: CashCallback,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    """
+    Starts correction for an exact report_id.
+    """
+
+    user = get_database_user(
+        data
+    )
+
+    if user is None:
+        return
+
+    store_id = callback_data.store_id
+    report_id = callback_data.report_id
+
+    if (
+        store_id <= 0
+        or report_id <= 0
+        or not can_access_store(
+            store_id=store_id,
+            data=data,
+        )
+    ):
+        await safe_callback_answer(
+            callback,
+            "Немає доступу "
+            "до цього звіту.",
+            show_alert=True,
+        )
+        return
+
+    await safe_callback_answer(
+        callback,
+        "Виправлення звіту",
+    )
+
+    await state.clear()
+
+    await state.update_data(
+        closing_correction_mode=True,
+        closing_store_id=store_id,
+        closing_report_id=report_id,
+        closing_cash_amount=None,
+        closing_receipt_file_id=None,
+        closing_receipt_file_unique_id=None,
+        closing_receipt_upload_kind=None,
+    )
+
+    await state.set_state(
+        ClosingStates.waiting_cash
+    )
+
+    await safe_edit(
+        callback,
+        text=(
+            "✏️ <b>Виправлення "
+            "звіту</b>\n\n"
+            "Старий звіт "
+            "залишається "
+            "чинним, доки "
+            "ви не надішлете "
+            "новий.\n\n"
+            "💵 Введіть "
+            "<b>нову суму каси</b>."
+        ),
+        reply_markup=(
+            cash_input_keyboard(
+                store_id=store_id,
+                report_id=report_id,
+            )
+        ),
     )
 
 
@@ -2731,6 +2933,378 @@ async def closing_confirm_callback(
 
         return
 
+    # CORRECTION FINAL SUBMIT
+    correction_state = await state.get_data()
+
+    if bool(
+        correction_state.get(
+            "closing_correction_mode"
+        )
+    ):
+        report_id = to_int(
+            correction_state.get(
+                "closing_report_id"
+            )
+        )
+
+        correction_store_id = to_int(
+            correction_state.get(
+                "closing_store_id"
+            )
+        )
+
+        if (
+            report_id <= 0
+            or correction_store_id != store_id
+        ):
+            await state.clear()
+
+            await safe_callback_answer(
+                callback,
+                "Дані виправлення "
+                "застаріли.",
+                show_alert=True,
+            )
+            return
+
+        try:
+            amount = Decimal(
+                str(
+                    correction_state.get(
+                        "closing_cash_amount"
+                    )
+                )
+            ).quantize(
+                MONEY_QUANT,
+                rounding=ROUND_HALF_UP,
+            )
+        except (
+            InvalidOperation,
+            TypeError,
+            ValueError,
+        ):
+            await safe_callback_answer(
+                callback,
+                "Введіть нову "
+                "суму каси.",
+                show_alert=True,
+            )
+            return
+
+        receipt_file_id = (
+            correction_state.get(
+                "closing_receipt_file_id"
+            )
+        )
+
+        if not receipt_file_id:
+            await safe_callback_answer(
+                callback,
+                "Надішліть нове "
+                "фото чека.",
+                show_alert=True,
+            )
+            return
+
+        service = get_closing_service(
+            data
+        )
+
+        if service is None:
+            await safe_callback_answer(
+                callback,
+                "ClosingService unavailable.",
+                show_alert=True,
+            )
+            return
+
+        await safe_callback_answer(
+            callback,
+            "Надсилаю "
+            "виправлений "
+            "звіт…",
+        )
+
+        session = service.session
+
+        new_group_message = None
+        old_chat_id = None
+        old_message_id = None
+
+        try:
+            report = (
+                await service.repositories.closings
+                .get_report_for_update_or_raise(
+                    report_id
+                )
+            )
+
+            if report.store_id != store_id:
+                raise ValueError(
+                    "Report/store mismatch."
+                )
+
+            if report.actual_submitted_at is None:
+                raise ValueError(
+                    "Report is not submitted."
+                )
+
+            decision = (
+                await service.access
+                .can_operate_store(
+                    user,
+                    store_id,
+                )
+            )
+
+            decision.raise_if_denied()
+
+            old_chat_id = getattr(
+                report,
+                "closing_group_chat_id",
+                None,
+            )
+
+            old_topic_id = getattr(
+                report,
+                "closing_group_topic_id",
+                None,
+            )
+
+            old_message_id = getattr(
+                report,
+                "closing_group_message_id",
+                None,
+            )
+
+            if (
+                not old_chat_id
+                or not old_message_id
+            ):
+                raise RuntimeError(
+                    "Original Telegram message "
+                    "is not delivered yet."
+                )
+
+            original_submitted_at = (
+                report.actual_submitted_at
+            )
+
+            store = (
+                await service.access
+                .get_store_or_raise(
+                    store_id
+                )
+            )
+
+            previous_values = (
+                service.closing_snapshot(
+                    report
+                )
+            )
+
+            modified_at = now_local()
+
+            reason = (
+                "Виправлення "
+                "звіту через Telegram"
+            )
+
+            report = (
+                await service.repositories.closings
+                .modify_cash_amount(
+                    report_id=report_id,
+                    new_cash_amount=amount,
+                    modified_by_id=user.id,
+                    modified_at=modified_at,
+                    reason=reason,
+                )
+            )
+
+            report = (
+                await service.repositories.closings
+                .replace_receipt(
+                    report_id=report_id,
+                    new_file_id=receipt_file_id,
+                    new_file_unique_id=(
+                        correction_state.get(
+                            "closing_receipt_file_unique_id"
+                        )
+                    ),
+                    modified_by_id=user.id,
+                    modified_at=modified_at,
+                    reason=reason,
+                )
+            )
+
+            if (
+                report.actual_submitted_at
+                != original_submitted_at
+            ):
+                raise RuntimeError(
+                    "actual_submitted_at changed "
+                    "during correction"
+                )
+
+            current_values = (
+                service.closing_snapshot(
+                    report
+                )
+            )
+
+            await service.log_report_modification(
+                actor=user,
+                store=store,
+                report=report,
+                previous_values=previous_values,
+                current_values=current_values,
+                reason=reason,
+                description=(
+                    "Виправлено "
+                    "вечірній "
+                    "звіт: каса "
+                    "та чек"
+                ),
+            )
+
+            timezone_name = (
+                await service.get_timezone_name()
+            )
+
+            caption = (
+                service.build_group_report_text(
+                    store=store,
+                    report=report,
+                    timezone_name=timezone_name,
+                )
+                + "\n\n"
+                + "✏️ <b>Звіт "
+                "виправлено</b>"
+            )
+
+            send_kwargs = {
+                "chat_id": int(old_chat_id),
+                "caption": caption,
+                "parse_mode": "HTML",
+            }
+
+            if old_topic_id:
+                send_kwargs[
+                    "message_thread_id"
+                ] = int(old_topic_id)
+
+            upload_kind = str(
+                correction_state.get(
+                    "closing_receipt_upload_kind"
+                )
+                or "photo"
+            ).lower()
+
+            if upload_kind == "document":
+                new_group_message = (
+                    await callback.bot.send_document(
+                        document=receipt_file_id,
+                        **send_kwargs,
+                    )
+                )
+            else:
+                new_group_message = (
+                    await callback.bot.send_photo(
+                        photo=receipt_file_id,
+                        **send_kwargs,
+                    )
+                )
+
+            await service.mark_group_delivery(
+                report_id=report_id,
+                chat_id=(
+                    new_group_message.chat.id
+                ),
+                message_id=(
+                    new_group_message.message_id
+                ),
+                sent_at=now_local(),
+                topic_id=(
+                    new_group_message
+                    .message_thread_id
+                ),
+            )
+
+            await session.commit()
+
+        except Exception as error:
+            await session.rollback()
+
+            if new_group_message is not None:
+                try:
+                    await callback.bot.delete_message(
+                        chat_id=(
+                            new_group_message.chat.id
+                        ),
+                        message_id=(
+                            new_group_message
+                            .message_id
+                        ),
+                    )
+                except Exception:
+                    pass
+
+            logger.exception(
+                "Closing correction failed | "
+                "store_id=%s report_id=%s "
+                "error=%s",
+                store_id,
+                report_id,
+                error,
+            )
+
+            await safe_callback_answer(
+                callback,
+                "Не вдалося "
+                "виправити "
+                "звіт. "
+                "Старий звіт "
+                "залишено.",
+                show_alert=True,
+            )
+            return
+
+        await state.clear()
+
+        try:
+            await callback.bot.delete_message(
+                chat_id=int(old_chat_id),
+                message_id=int(old_message_id),
+            )
+
+        except Exception as error:
+            logger.warning(
+                "New corrected report sent, "
+                "but old message delete failed | "
+                "store_id=%s report_id=%s "
+                "error=%s",
+                store_id,
+                report_id,
+                error,
+            )
+
+        await safe_edit(
+            callback,
+            text=(
+                "✅ <b>Звіт "
+                "виправлено "
+                "та надіслано.</b>"
+            ),
+            reply_markup=(
+                closing_success_keyboard(
+                    store_id=store_id,
+                    report_id=report_id,
+                )
+            ),
+        )
+
+        return
+
     current = await get_closing_status(
         store_id=store_id,
         user=user,
@@ -2763,7 +3337,35 @@ async def closing_confirm_callback(
 
     state_data = await state.get_data()
 
-    if amount is None:
+    state_report_id = to_int(
+        state_data.get(
+            "closing_report_id"
+        )
+    )
+
+    state_store_id = to_int(
+        state_data.get(
+            "closing_store_id"
+        )
+    )
+
+    current_report_id = (
+        result_report_id(
+            current
+        )
+    )
+
+    state_matches_current_report = (
+        current_report_id > 0
+        and state_report_id
+        == current_report_id
+        and state_store_id == store_id
+    )
+
+    if (
+        amount is None
+        and state_matches_current_report
+    ):
         raw_amount = state_data.get(
             "closing_cash_amount"
         )
@@ -2776,7 +3378,10 @@ async def closing_confirm_callback(
             except Exception:
                 amount = None
 
-    if not receipt:
+    if (
+        not receipt
+        and state_matches_current_report
+    ):
         receipt = state_data.get(
             "closing_receipt_file_id"
         )
@@ -2952,7 +3557,8 @@ async def closing_confirm_callback(
             ),
             reply_markup=(
                 closing_success_keyboard(
-                    store_id=store_id
+                    store_id=store_id,
+                    report_id=report_id,
                 )
             ),
         )
