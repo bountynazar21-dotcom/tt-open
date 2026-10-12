@@ -2661,11 +2661,27 @@ async def closing_receipt_message(
         )
         return
 
+    current_after_receipt = (
+        await get_closing_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
+    )
+
+    canonical_report_id = (
+        result_report_id(
+            current_after_receipt
+        )
+        or result_report_id(result)
+        or report_id
+    )
+
     await state.update_data(
         closing_cash_amount=str(amount),
         closing_receipt_file_id=file_id,
         closing_store_id=store_id,
-        closing_report_id=report_id,
+        closing_report_id=canonical_report_id,
     )
 
     await state.set_state(None)
