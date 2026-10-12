@@ -3372,10 +3372,13 @@ async def closing_confirm_callback(
     )
 
     state_matches_current_report = (
-        current_report_id > 0
-        and state_report_id
-        == current_report_id
+        state_report_id > 0
         and state_store_id == store_id
+        and (
+            current_report_id <= 0
+            or state_report_id
+            == current_report_id
+        )
     )
 
     if (
