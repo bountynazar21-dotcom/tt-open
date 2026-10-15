@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import contextvars
+import logging
+import os
+import re
+import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import TelegramObject
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -13,6 +19,500 @@ from sqlalchemy.ext.asyncio import (
 
 from app.repositories import Repositories
 from app.services import Services
+
+
+perf_logger = logging.getLogger(
+    "app.performance"
+)
+
+
+@dataclass(slots=True)
+class _PerfTraceState:
+    action: str
+    started_at: float
+
+    db_queries: int = 0
+    db_total_ms: float = 0.0
+    db_slowest_ms: float = 0.0
+    db_slowest_sql: str = ""
+
+    db_repeats: dict[str, int] = field(
+        default_factory=dict
+    )
+
+    telegram_calls: int = 0
+    telegram_total_ms: float = 0.0
+    telegram_slowest_ms: float = 0.0
+    telegram_slowest_method: str = ""
+
+
+_perf_current: contextvars.ContextVar[
+    _PerfTraceState | None
+] = contextvars.ContextVar(
+    "telegram_update_perf_trace",
+    default=None,
+)
+
+_perf_sql_binds: set[int] = set()
+_perf_telegram_sessions: set[int] = set()
+
+
+def _perf_begin(
+    action: str,
+):
+    return _perf_current.set(
+        _PerfTraceState(
+            action=action,
+            started_at=time.perf_counter(),
+        )
+    )
+
+
+def _perf_end(
+    token,
+) -> _PerfTraceState | None:
+    state = _perf_current.get()
+
+    _perf_current.reset(
+        token
+    )
+
+    return state
+
+
+def _perf_clean_sql(
+    statement: Any,
+) -> str:
+    sql = " ".join(
+        str(
+            statement or ""
+        ).split()
+    )
+
+    # ?? ??????? literal string values.
+    sql = re.sub(
+        r"'(?:''|[^'])*'",
+        "'?'",
+        sql,
+    )
+
+    sql = sql.replace(
+        "|",
+        "?",
+    )
+
+    if len(sql) > 260:
+        sql = (
+            sql[:257]
+            + "..."
+        )
+
+    return sql
+
+
+def _perf_before_cursor_execute(
+    conn,
+    cursor,
+    statement,
+    parameters,
+    context,
+    executemany,
+) -> None:
+    if _perf_current.get() is None:
+        return
+
+    context._perf_started_at = (
+        time.perf_counter()
+    )
+
+
+def _perf_after_cursor_execute(
+    conn,
+    cursor,
+    statement,
+    parameters,
+    context,
+    executemany,
+) -> None:
+    state = _perf_current.get()
+
+    started_at = getattr(
+        context,
+        "_perf_started_at",
+        None,
+    )
+
+    if (
+        state is None
+        or started_at is None
+    ):
+        return
+
+    elapsed_ms = (
+        time.perf_counter()
+        - started_at
+    ) * 1000.0
+
+    sql = _perf_clean_sql(
+        statement
+    )
+
+    state.db_queries += 1
+    state.db_total_ms += elapsed_ms
+
+    state.db_repeats[sql] = (
+        state.db_repeats.get(
+            sql,
+            0,
+        )
+        + 1
+    )
+
+    if (
+        elapsed_ms
+        > state.db_slowest_ms
+    ):
+        state.db_slowest_ms = (
+            elapsed_ms
+        )
+        state.db_slowest_sql = sql
+
+
+def _perf_install_sql(
+    session: AsyncSession,
+) -> None:
+    try:
+        bind = (
+            session
+            .sync_session
+            .get_bind()
+        )
+
+        if bind is None:
+            return
+
+        key = id(
+            bind
+        )
+
+        if key in _perf_sql_binds:
+            return
+
+        sqlalchemy_event.listen(
+            bind,
+            "before_cursor_execute",
+            _perf_before_cursor_execute,
+        )
+
+        sqlalchemy_event.listen(
+            bind,
+            "after_cursor_execute",
+            _perf_after_cursor_execute,
+        )
+
+        _perf_sql_binds.add(
+            key
+        )
+
+    except Exception:
+        perf_logger.exception(
+            "PERF TRACE SQL INSTALL FAILED"
+        )
+
+
+class _TelegramPerfMiddleware:
+    async def __call__(
+        self,
+        make_request,
+        bot,
+        method,
+    ):
+        state = (
+            _perf_current.get()
+        )
+
+        if state is None:
+            return await make_request(
+                bot,
+                method,
+            )
+
+        started_at = (
+            time.perf_counter()
+        )
+
+        try:
+            return await make_request(
+                bot,
+                method,
+            )
+
+        finally:
+            elapsed_ms = (
+                time.perf_counter()
+                - started_at
+            ) * 1000.0
+
+            current = (
+                _perf_current.get()
+            )
+
+            if current is not None:
+                method_name = (
+                    type(method).__name__
+                )
+
+                current.telegram_calls += 1
+                current.telegram_total_ms += (
+                    elapsed_ms
+                )
+
+                if (
+                    elapsed_ms
+                    > current.telegram_slowest_ms
+                ):
+                    current.telegram_slowest_ms = (
+                        elapsed_ms
+                    )
+
+                    current.telegram_slowest_method = (
+                        method_name
+                    )
+
+
+def _perf_install_telegram(
+    bot: Bot,
+) -> None:
+    try:
+        session = bot.session
+
+        key = id(
+            session
+        )
+
+        if key in _perf_telegram_sessions:
+            return
+
+        session.middleware(
+            _TelegramPerfMiddleware()
+        )
+
+        _perf_telegram_sessions.add(
+            key
+        )
+
+    except Exception:
+        perf_logger.exception(
+            "PERF TRACE TELEGRAM INSTALL FAILED"
+        )
+
+
+def _perf_action(
+    event: TelegramObject,
+) -> str:
+    try:
+        callback = getattr(
+            event,
+            "callback_query",
+            None,
+        )
+
+        if (
+            callback is None
+            and hasattr(
+                event,
+                "data",
+            )
+        ):
+            callback = event
+
+        if callback is not None:
+            callback_data = getattr(
+                callback,
+                "data",
+                None,
+            )
+
+            if callback_data:
+                return (
+                    "callback:"
+                    + str(
+                        callback_data
+                    )[:140]
+                )
+
+        message = getattr(
+            event,
+            "message",
+            None,
+        )
+
+        if (
+            message is None
+            and hasattr(
+                event,
+                "text",
+            )
+        ):
+            message = event
+
+        if message is not None:
+            message_text = (
+                getattr(
+                    message,
+                    "text",
+                    None,
+                )
+                or getattr(
+                    message,
+                    "caption",
+                    None,
+                )
+            )
+
+            if (
+                isinstance(
+                    message_text,
+                    str,
+                )
+                and message_text.startswith(
+                    "/"
+                )
+            ):
+                command = (
+                    message_text
+                    .split(
+                        maxsplit=1
+                    )[0]
+                    .split(
+                        "@",
+                        1,
+                    )[0]
+                )
+
+                return (
+                    "command:"
+                    + command[:100]
+                )
+
+            if getattr(
+                message,
+                "photo",
+                None,
+            ):
+                return "message:photo"
+
+            if getattr(
+                message,
+                "document",
+                None,
+            ):
+                return "message:document"
+
+            return "message"
+
+    except Exception:
+        pass
+
+    return type(
+        event
+    ).__name__
+
+
+def _perf_emit(
+    state: _PerfTraceState | None,
+    *,
+    success: bool,
+    commit_ms: float,
+) -> None:
+    if state is None:
+        return
+
+    try:
+        total_ms = (
+            time.perf_counter()
+            - state.started_at
+        ) * 1000.0
+
+        other_ms = max(
+            total_ms
+            - state.db_total_ms
+            - state.telegram_total_ms,
+            0.0,
+        )
+
+        threshold_ms = float(
+            os.getenv(
+                "PERF_TRACE_THRESHOLD_MS",
+                "500",
+            )
+        )
+
+        if (
+            total_ms
+            < threshold_ms
+            and state.db_queries < 10
+        ):
+            return
+
+        repeat_sql = "-"
+        repeat_count = 0
+
+        if state.db_repeats:
+            (
+                repeat_sql,
+                repeat_count,
+            ) = max(
+                state.db_repeats.items(),
+                key=lambda item: item[1],
+            )
+
+        perf_logger.warning(
+            (
+                "PERF TRACE | "
+                "action=%s | "
+                "total=%.1fms | "
+                "db=%.1fms | "
+                "db_q=%d | "
+                "tg=%.1fms | "
+                "tg_calls=%d | "
+                "other=%.1fms | "
+                "commit=%.1fms | "
+                "slow_db=%.1fms | "
+                "slow_sql=%s | "
+                "repeat_q=%d | "
+                "repeat_sql=%s | "
+                "slow_tg=%.1fms | "
+                "slow_tg_method=%s | "
+                "success=%d"
+            ),
+            state.action,
+            total_ms,
+            state.db_total_ms,
+            state.db_queries,
+            state.telegram_total_ms,
+            state.telegram_calls,
+            other_ms,
+            commit_ms,
+            state.db_slowest_ms,
+            (
+                state.db_slowest_sql
+                or "-"
+            ),
+            repeat_count,
+            repeat_sql,
+            state.telegram_slowest_ms,
+            (
+                state.telegram_slowest_method
+                or "-"
+            ),
+            1 if success else 0,
+        )
+
+    except Exception:
+        perf_logger.exception(
+            "PERF TRACE EMIT FAILED"
+        )
 
 
 HandlerType: TypeAlias = Callable[
@@ -140,6 +640,19 @@ class DatabaseMiddleware(BaseMiddleware):
         Створює залежності та запускає handler.
         """
 
+        _perf_install_sql(
+            session
+        )
+
+        perf_token = _perf_begin(
+            _perf_action(
+                event
+            )
+        )
+
+        perf_success = False
+        commit_ms = 0.0
+
         repositories = Repositories(
             session
         )
@@ -148,6 +661,11 @@ class DatabaseMiddleware(BaseMiddleware):
             event=event,
             data=data,
         )
+
+        if bot is not None:
+            _perf_install_telegram(
+                bot
+            )
 
         services = Services(
             repositories,
@@ -183,7 +701,18 @@ class DatabaseMiddleware(BaseMiddleware):
                 owns_session
                 and self.auto_commit
             ):
+                commit_started_at = (
+                    time.perf_counter()
+                )
+
                 await session.commit()
+
+                commit_ms = (
+                    time.perf_counter()
+                    - commit_started_at
+                ) * 1000.0
+
+            perf_success = True
 
             return result
 
@@ -196,9 +725,19 @@ class DatabaseMiddleware(BaseMiddleware):
             raise
 
         finally:
+            perf_state = _perf_end(
+                perf_token
+            )
+
             self.restore_dependencies(
                 data=data,
                 previous_values=previous_values,
+            )
+
+            _perf_emit(
+                perf_state,
+                success=perf_success,
+                commit_ms=commit_ms,
             )
 
     # ==========================================
