@@ -617,6 +617,136 @@ def store_name(
 # =========================================================
 
 
+async def _prime_bush_status_cache(
+    *,
+    data: dict[str, Any],
+) -> None:
+    """
+    Bulk preload today's opening/closing records
+    for bush-admin screens.
+
+    ???? ??????????? ???? ??? ?? Telegram update.
+    """
+
+    from app.utils.datetime import (
+        today_local,
+    )
+
+    today = today_local()
+
+    if (
+        data.get(
+            "_bush_status_cache_date"
+        )
+        == today
+    ):
+        return
+
+    repositories = data.get(
+        "repositories"
+    )
+
+    if repositories is None:
+        return
+
+    openings_repository = getattr(
+        repositories,
+        "openings",
+        None,
+    )
+
+    closings_repository = getattr(
+        repositories,
+        "closings",
+        None,
+    )
+
+    openings_getter = getattr(
+        openings_repository,
+        "get_for_date",
+        None,
+    )
+
+    closings_getter = getattr(
+        closings_repository,
+        "get_for_date",
+        None,
+    )
+
+    if (
+        not callable(openings_getter)
+        or not callable(closings_getter)
+    ):
+        return
+
+    try:
+        opening_rows = await openings_getter(
+            business_date=today,
+        )
+
+        closing_rows = await closings_getter(
+            business_date=today,
+        )
+
+    except Exception:
+        logger.exception(
+            "Bush admin bulk status preload failed | "
+            "date=%s",
+            today,
+        )
+        return
+
+    opening_by_store: dict[
+        int,
+        Any,
+    ] = {}
+
+    for row in opening_rows:
+        store_id = to_int(
+            first_attr(
+                row,
+                "store_id",
+                default=0,
+            )
+        )
+
+        if store_id > 0:
+            opening_by_store[
+                store_id
+            ] = row
+
+    closing_by_store: dict[
+        int,
+        Any,
+    ] = {}
+
+    for row in closing_rows:
+        store_id = to_int(
+            first_attr(
+                row,
+                "store_id",
+                default=0,
+            )
+        )
+
+        if store_id > 0:
+            closing_by_store[
+                store_id
+            ] = row
+
+    data[
+        "_bush_opening_by_store"
+    ] = opening_by_store
+
+    data[
+        "_bush_closing_by_store"
+    ] = closing_by_store
+
+    data[
+        "_bush_status_cache_date"
+    ] = today
+
+
 async def get_store_runtime_state(
     *,
     store: Any,
@@ -649,17 +779,42 @@ async def get_store_runtime_state(
             0,
         )
 
-    opening = await get_opening_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+    if (
+        "_bush_status_cache_date"
+        in data
+    ):
+        opening = (
+            data.get(
+                "_bush_opening_by_store",
+                {},
+            )
+            .get(
+                store_id
+            )
+        )
 
-    closing = await get_closing_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+        closing = (
+            data.get(
+                "_bush_closing_by_store",
+                {},
+            )
+            .get(
+                store_id
+            )
+        )
+
+    else:
+        opening = await get_opening_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
+
+        closing = await get_closing_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
 
     opened = opening_exists(
         opening
@@ -817,6 +972,10 @@ async def build_store_items(
     """
     Побудова станів усіх ТТ.
     """
+
+    await _prime_bush_status_cache(
+        data=data,
+    )
 
     result: list[
         BushAdminStoreItem

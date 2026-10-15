@@ -853,6 +853,138 @@ async def store_bush_name(
 # =========================================================
 
 
+async def _prime_director_status_cache(
+    *,
+    data: dict[str, Any],
+) -> None:
+    """
+    Bulk preload today's opening/closing records.
+
+    ???? update:
+        openings -> 1 SQL
+        closings -> 1 SQL
+
+    ??????? ??????? lookup ??? ?????? ??.
+    """
+
+    today = today_local()
+
+    if (
+        data.get(
+            "_director_status_cache_date"
+        )
+        == today
+    ):
+        return
+
+    repositories = data.get(
+        "repositories"
+    )
+
+    if repositories is None:
+        return
+
+    openings_repository = getattr(
+        repositories,
+        "openings",
+        None,
+    )
+
+    closings_repository = getattr(
+        repositories,
+        "closings",
+        None,
+    )
+
+    openings_getter = getattr(
+        openings_repository,
+        "get_for_date",
+        None,
+    )
+
+    closings_getter = getattr(
+        closings_repository,
+        "get_for_date",
+        None,
+    )
+
+    if (
+        not callable(openings_getter)
+        or not callable(closings_getter)
+    ):
+        return
+
+    try:
+        # IMPORTANT:
+        # ???? AsyncSession -> ?????? ??????????,
+        # ??? asyncio.gather().
+        opening_rows = await openings_getter(
+            business_date=today,
+        )
+
+        closing_rows = await closings_getter(
+            business_date=today,
+        )
+
+    except Exception:
+        logger.exception(
+            "Director bulk status preload failed | "
+            "date=%s",
+            today,
+        )
+        return
+
+    opening_by_store: dict[
+        int,
+        Any,
+    ] = {}
+
+    for row in opening_rows:
+        store_id = to_int(
+            first_attr(
+                row,
+                "store_id",
+                default=0,
+            )
+        )
+
+        if store_id > 0:
+            opening_by_store[
+                store_id
+            ] = row
+
+    closing_by_store: dict[
+        int,
+        Any,
+    ] = {}
+
+    for row in closing_rows:
+        store_id = to_int(
+            first_attr(
+                row,
+                "store_id",
+                default=0,
+            )
+        )
+
+        if store_id > 0:
+            closing_by_store[
+                store_id
+            ] = row
+
+    data[
+        "_director_opening_by_store"
+    ] = opening_by_store
+
+    data[
+        "_director_closing_by_store"
+    ] = closing_by_store
+
+    data[
+        "_director_status_cache_date"
+    ] = today
+
+
 async def build_director_store_item(
     *,
     store: Any,
@@ -872,17 +1004,42 @@ async def build_director_store_item(
         store
     )
 
-    opening = await get_opening_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+    if (
+        "_director_status_cache_date"
+        in data
+    ):
+        opening = (
+            data.get(
+                "_director_opening_by_store",
+                {},
+            )
+            .get(
+                store_id
+            )
+        )
 
-    closing = await get_closing_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+        closing = (
+            data.get(
+                "_director_closing_by_store",
+                {},
+            )
+            .get(
+                store_id
+            )
+        )
+
+    else:
+        opening = await get_opening_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
+
+        closing = await get_closing_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
 
     opened = opening_exists(
         opening
@@ -1005,6 +1162,10 @@ async def build_director_store_items(
     """
     Статуси всіх ТТ.
     """
+
+    await _prime_director_status_cache(
+        data=data,
+    )
 
     result: list[
         DirectorStoreItem

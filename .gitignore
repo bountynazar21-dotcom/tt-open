@@ -34,3 +34,15 @@ storage/temp/*
 *_inspect.txt
 *_inspection.txt
 *_core.txt
+
+# Local performance/debug tools
+analyze_perf.py
+benchmark_inventory.py
+benchmark_inventory.txt
+benchmark_result.txt
+perf_sweep.py
+perf_sweep_result.txt
+railway_perf.log
+railway_perf_full.log
+perf_target_code.txt
+status_helpers.txt
