@@ -71,6 +71,10 @@ class BushAdminAction(StrEnum):
 
     REPORTS = "rep"
 
+    REPORT_DAILY = "repd"
+    REPORT_WEEKLY = "repw"
+    REPORT_14D = "rep14"
+
     INVITES = "inv"
 
     REFRESH = "r"
@@ -1908,65 +1912,83 @@ def bush_admin_reports_keyboard(
     bush_id: int,
 ) -> InlineKeyboardMarkup:
     """
-    Звіти куща.
+    Bush reports.
     """
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 inline_button(
-                    text="📅 За сьогодні",
-                    callback=ReportCallback(
-                        action=ReportAction.DAILY,
-                        ref_id=bush_id,
+                    text="\U0001f4ca \u0421\u044c\u043e\u0433\u043e\u0434\u043d\u0456",
+                    callback=BushAdminCallback(
+                        action=(
+                            BushAdminAction.REPORT_DAILY
+                        ),
+                        bush_id=bush_id,
                         page=0,
                     ),
                 )
             ],
             [
                 inline_button(
-                    text="📆 За тиждень",
-                    callback=ReportCallback(
-                        action=ReportAction.WEEKLY,
-                        ref_id=bush_id,
-                        page=0,
-                    ),
-                ),
-                inline_button(
-                    text="🗓 За місяць",
-                    callback=ReportCallback(
-                        action=ReportAction.MONTHLY,
-                        ref_id=bush_id,
-                        page=0,
-                    ),
-                ),
-            ],
-            [
-                inline_button(
-                    text="🌿 Звіт куща",
-                    callback=ReportCallback(
-                        action=ReportAction.BUSH,
-                        ref_id=bush_id,
+                    text="\U0001f4c5 \u0422\u0438\u0436\u0434\u0435\u043d\u044c",
+                    callback=BushAdminCallback(
+                        action=(
+                            BushAdminAction.REPORT_WEEKLY
+                        ),
+                        bush_id=bush_id,
                         page=0,
                     ),
                 )
             ],
             [
                 inline_button(
-                    text="📥 Excel",
-                    callback=ReportCallback(
-                        action=ReportAction.EXCEL,
-                        ref_id=bush_id,
+                    text="\U0001f5d3\ufe0f 14 \u0434\u043d\u0456\u0432",
+                    callback=BushAdminCallback(
+                        action=(
+                            BushAdminAction.REPORT_14D
+                        ),
+                        bush_id=bush_id,
                         page=0,
                     ),
                 )
             ],
             [
                 bush_admin_button(
-                    text="🔙 Назад",
-                    action=(
-                        BushAdminAction.MENU
+                    text="\U0001f519 \u041d\u0430\u0437\u0430\u0434",
+                    action=BushAdminAction.MENU,
+                    bush_id=bush_id,
+                )
+            ],
+        ]
+    )
+
+
+def bush_admin_report_result_keyboard(
+    *,
+    action: BushAdminAction,
+    bush_id: int,
+) -> InlineKeyboardMarkup:
+    """
+    Bush report result actions.
+    """
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                inline_button(
+                    text="\U0001f4e5 \u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 Excel",
+                    callback=BushAdminCallback(
+                        action=action,
+                        bush_id=bush_id,
+                        page=1,
                     ),
+                )
+            ],
+            [
+                bush_admin_button(
+                    text="\U0001f519 \u0414\u043e \u0437\u0432\u0456\u0442\u0456\u0432",
+                    action=BushAdminAction.REPORTS,
                     bush_id=bush_id,
                 )
             ],

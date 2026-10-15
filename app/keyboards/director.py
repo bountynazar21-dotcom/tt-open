@@ -1480,7 +1480,7 @@ def director_reports_keyboard(
             ],
             [
                 director_button(
-                    text="\U0001f5d3\ufe0f \u041c\u0456\u0441\u044f\u0446\u044c",
+                    text="\U0001f5d3\ufe0f 14 \u0434\u043d\u0456\u0432",
                     action=DirectorAction.REPORT_MONTHLY,
                 )
             ],

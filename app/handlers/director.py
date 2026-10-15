@@ -3181,6 +3181,339 @@ async def bush_admin_reports_callback(
     )
 
 
+
+@router.callback_query(
+    BushAdminCallback.filter(
+        F.action.in_(
+            {
+                BushAdminAction.REPORT_DAILY,
+                BushAdminAction.REPORT_WEEKLY,
+                BushAdminAction.REPORT_14D,
+            }
+        )
+    )
+)
+async def bush_admin_period_report_callback(
+    callback: CallbackQuery,
+    callback_data: BushAdminCallback,
+    **data: Any,
+) -> None:
+    """
+    Director-style report limited to one bush.
+    """
+
+    from datetime import timedelta
+
+    from app.handlers.common import (
+        get_database_user,
+    )
+    from app.handlers.opening import (
+        get_service,
+    )
+    from app.handlers.root_admin import (
+        build_director_period_report_text,
+    )
+    from app.keyboards.bush_admin import (
+        bush_admin_report_result_keyboard,
+    )
+    from app.utils.datetime import (
+        today_local,
+    )
+
+    user = get_database_user(
+        data
+    )
+
+    if user is None:
+        await callback.answer(
+            "\u041a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447\u0430 "
+            "\u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
+            show_alert=True,
+        )
+        return
+
+    bush_id = resolve_bush_id(
+        requested_bush_id=(
+            callback_data.bush_id
+        ),
+        data=data,
+    )
+
+    if (
+        bush_id is None
+        or not can_view_bush(
+            bush_id=bush_id,
+            data=data,
+        )
+    ):
+        await callback.answer(
+            "\u041d\u0435\u043c\u0430\u0454 "
+            "\u0434\u043e\u0441\u0442\u0443\u043f\u0443 "
+            "\u0434\u043e \u0446\u044c\u043e\u0433\u043e "
+            "\u043a\u0443\u0449\u0430.",
+            show_alert=True,
+        )
+        return
+
+    message = callback.message
+
+    if message is None:
+        await callback.answer()
+        return
+
+    service = get_service(
+        data,
+        "reports",
+        "report",
+    )
+
+    if service is None:
+        await callback.answer(
+            "\u0421\u0435\u0440\u0432\u0456\u0441 "
+            "\u0437\u0432\u0456\u0442\u0456\u0432 "
+            "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
+            show_alert=True,
+        )
+        return
+
+    today = today_local()
+
+    bush_name = await get_bush_title(
+        bush_id=bush_id,
+        data=data,
+    )
+
+    action = callback_data.action
+
+    # =====================================================
+    # EXCEL
+    # =====================================================
+
+    if callback_data.page == 1:
+        excel_service = get_service(
+            data,
+            "excel",
+        )
+
+        if excel_service is None:
+            await callback.answer(
+                "\u0421\u0435\u0440\u0432\u0456\u0441 Excel "
+                "\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer(
+            "\u0424\u043e\u0440\u043c\u0443\u044e Excel\u2026"
+        )
+
+        try:
+            if (
+                action
+                == BushAdminAction.REPORT_DAILY
+            ):
+                report_data = (
+                    await service.prepare_daily_excel(
+                        user=user,
+                        business_date=today,
+                        bush_id=bush_id,
+                    )
+                )
+
+                caption = (
+                    "\U0001f4ca "
+                    "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
+                    "Excel \u0437\u0430 "
+                    "\u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456"
+                )
+
+            elif (
+                action
+                == BushAdminAction.REPORT_WEEKLY
+            ):
+                report_data = (
+                    await service.prepare_weekly_excel(
+                        user=user,
+                        reference_date=today,
+                        bush_id=bush_id,
+                    )
+                )
+
+                caption = (
+                    "\U0001f4c5 "
+                    "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
+                    "Excel \u0437\u0430 "
+                    "\u0442\u0438\u0436\u0434\u0435\u043d\u044c"
+                )
+
+            else:
+                report_data = (
+                    await service.prepare_period_excel(
+                        user=user,
+                        date_from=(
+                            today
+                            - timedelta(days=13)
+                        ),
+                        date_to=today,
+                        bush_id=bush_id,
+                    )
+                )
+
+                caption = (
+                    "\U0001f5d3\ufe0f "
+                    "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
+                    "Excel \u0437\u0430 "
+                    "14 \u0434\u043d\u0456\u0432"
+                )
+
+            document = (
+                excel_service
+                .generate_telegram_file(
+                    report_data
+                )
+            )
+
+            await message.answer_document(
+                document=document,
+                caption=(
+                    f"{caption}\n"
+                    f"\U0001f33f {escape(bush_name)}"
+                ),
+            )
+
+        except Exception:
+            logger.exception(
+                "Bush report Excel failed | "
+                "bush_id=%s action=%s",
+                bush_id,
+                action,
+            )
+
+            await message.answer(
+                "\u274c "
+                "\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+                "\u0441\u0444\u043e\u0440\u043c\u0443\u0432\u0430\u0442\u0438 Excel."
+            )
+
+        return
+
+    # =====================================================
+    # TELEGRAM
+    # =====================================================
+
+    await callback.answer(
+        "\u0424\u043e\u0440\u043c\u0443\u044e "
+        "\u0437\u0432\u0456\u0442\u2026"
+    )
+
+    try:
+        if (
+            action
+            == BushAdminAction.REPORT_DAILY
+        ):
+            result = (
+                await service.get_daily_report(
+                    user=user,
+                    business_date=today,
+                    bush_id=bush_id,
+                )
+            )
+
+            title = (
+                "\U0001f4ca <b>"
+                "\u0417\u0432\u0456\u0442 "
+                "\u043a\u0443\u0449\u0430 "
+                f"{escape(bush_name)} "
+                "\u0437\u0430 "
+                "\u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456"
+                "</b>"
+            )
+
+        elif (
+            action
+            == BushAdminAction.REPORT_WEEKLY
+        ):
+            result = (
+                await service.get_weekly_report(
+                    user=user,
+                    reference_date=today,
+                    bush_id=bush_id,
+                )
+            )
+
+            title = (
+                "\U0001f4c5 <b>"
+                "\u0417\u0432\u0456\u0442 "
+                "\u043a\u0443\u0449\u0430 "
+                f"{escape(bush_name)} "
+                "\u0437\u0430 "
+                "\u0442\u0438\u0436\u0434\u0435\u043d\u044c"
+                "</b>"
+            )
+
+        else:
+            result = (
+                await service.get_period_report(
+                    user=user,
+                    date_from=(
+                        today
+                        - timedelta(days=13)
+                    ),
+                    date_to=today,
+                    bush_id=bush_id,
+                )
+            )
+
+            title = (
+                "\U0001f5d3\ufe0f <b>"
+                "\u0417\u0432\u0456\u0442 "
+                "\u043a\u0443\u0449\u0430 "
+                f"{escape(bush_name)} "
+                "\u0437\u0430 "
+                "14 \u0434\u043d\u0456\u0432"
+                "</b>"
+            )
+
+    except Exception:
+        logger.exception(
+            "Bush report generation failed | "
+            "bush_id=%s action=%s",
+            bush_id,
+            action,
+        )
+
+        await safe_edit(
+            callback,
+            text=(
+                "\u274c <b>"
+                "\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+                "\u0441\u0444\u043e\u0440\u043c\u0443\u0432\u0430\u0442\u0438 "
+                "\u0437\u0432\u0456\u0442."
+                "</b>"
+            ),
+            reply_markup=build_keyboard(
+                bush_admin_reports_keyboard,
+                bush_id=bush_id,
+            ),
+        )
+        return
+
+    await safe_edit(
+        callback,
+        text=(
+            build_director_period_report_text(
+                title=title,
+                result=result,
+            )
+        ),
+        reply_markup=build_keyboard(
+            bush_admin_report_result_keyboard,
+            action=action,
+            bush_id=bush_id,
+        ),
+    )
+
+
 # =========================================================
 # INVITES
 # =========================================================

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import logging
 from html import escape
 from typing import Any
@@ -3609,10 +3611,13 @@ async def director_period_report_callback(
 
             else:
                 report_data = (
-                    await service.prepare_monthly_excel(
+                    await service.prepare_period_excel(
                         user=user,
-                        year=today.year,
-                        month=today.month,
+                        date_from=(
+                            today
+                            - timedelta(days=13)
+                        ),
+                        date_to=today,
                     )
                 )
 
@@ -3620,7 +3625,7 @@ async def director_period_report_callback(
                     "\U0001f5d3\ufe0f "
                     "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438\u0439 "
                     "Excel \u0437\u0430 "
-                    "\u043c\u0456\u0441\u044f\u0446\u044c"
+                    "14 \u0434\u043d\u0456\u0432"
                 )
 
             document = (
@@ -3705,10 +3710,13 @@ async def director_period_report_callback(
 
         else:
             result = (
-                await service.get_monthly_report(
+                await service.get_period_report(
                     user=user,
-                    year=today.year,
-                    month=today.month,
+                    date_from=(
+                        today
+                        - timedelta(days=13)
+                    ),
+                    date_to=today,
                 )
             )
 
@@ -3716,7 +3724,7 @@ async def director_period_report_callback(
                 "\U0001f5d3\ufe0f "
                 "<b>\u0417\u0432\u0456\u0442 "
                 "\u0437\u0430 "
-                "\u043c\u0456\u0441\u044f\u0446\u044c</b>"
+                "14 \u0434\u043d\u0456\u0432</b>"
             )
 
     except Exception:
