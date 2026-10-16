@@ -1123,7 +1123,7 @@ async def build_root_store_item(
     if not active:
         state = RootStoreState.INACTIVE
 
-    elif closed:
+    elif closed and context != "opening":
         state = RootStoreState.CLOSED
 
     elif context == "closing":
@@ -1500,6 +1500,117 @@ def build_root_user_item(
 # =========================================================
 
 
+
+async def _load_root_dashboard_fast(
+    *,
+    user: DatabaseUser | None,
+    data: dict[str, Any],
+):
+    """Read-only bulk data for ROOT dashboard."""
+
+    if not is_root_admin(user):
+        return None
+
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+    )
+
+    if session is None and repositories is not None:
+        session = getattr(repositories, "session", None)
+
+    if session is None:
+        return None
+
+    from types import SimpleNamespace
+    from sqlalchemy import select, func, or_
+
+    from app.database.models.store import Store
+    from app.database.models.bush import Bush
+    from app.database.models.cluster import Cluster
+    from app.database.models.user import User
+    from app.database.models.opening_checkin import OpeningCheckin
+    from app.database.models.closing_report import ClosingReport
+    from app.handlers.opening import now_local
+
+    business_date = now_local().date()
+
+    queries = (
+        select(
+            Store.id,
+            Store.store_number,
+            Store.code,
+            Store.name,
+            Store.city,
+            Store.bush_id,
+            Store.cluster_id,
+            Store.is_active,
+        ).where(
+            or_(
+                Store.city.is_(None),
+                func.lower(Store.city).notin_(
+                    {"????", "????", "kyiv", "kiev"}
+                ),
+            )
+        ).order_by(Store.store_number, Store.id),
+
+        select(
+            Bush.id,
+            Bush.name,
+            Bush.is_active,
+        ),
+
+        select(
+            Cluster.id,
+            Cluster.name,
+            Cluster.opening_time,
+            Cluster.is_active,
+        ),
+
+        select(
+            User.id,
+            User.role,
+            User.status,
+        ),
+
+        select(
+            OpeningCheckin.store_id,
+            OpeningCheckin.actual_open_time,
+            OpeningCheckin.lateness_minutes,
+        ).where(
+            OpeningCheckin.business_date == business_date
+        ),
+
+        select(
+            ClosingReport.store_id,
+            ClosingReport.actual_submitted_at,
+            ClosingReport.cash_amount,
+            ClosingReport.receipt_file_id,
+        ).where(
+            ClosingReport.business_date == business_date
+        ),
+    )
+
+    collections = []
+
+    for query in queries:
+        result = await session.execute(query)
+        collections.append([
+            SimpleNamespace(**dict(row))
+            for row in result.mappings().all()
+        ])
+
+    logger.info(
+        "ROOT DASHBOARD FAST | "
+        "stores=%s bushes=%s clusters=%s users=%s "
+        "openings=%s closings=%s",
+        *(len(items) for items in collections),
+    )
+
+    return tuple(collections)
+
+
 async def build_root_dashboard(
     *,
     user: DatabaseUser | None,
@@ -1515,18 +1626,72 @@ async def build_root_dashboard(
     Повний network dashboard.
     """
 
-    stores = await query_all_stores(
-        data=data
+    fast_data = await _load_root_dashboard_fast(
+        user=user,
+        data=data,
     )
-    bushes = await query_network_bushes(
-        data=data
-    )
-    clusters = await query_clusters(
-        data=data
-    )
-    users = await query_network_users(
-        data=data
-    )
+
+    if fast_data is None:
+        stores = await query_all_stores(
+            data=data
+        )
+        bushes = await query_network_bushes(
+            data=data
+        )
+        clusters = await query_clusters(
+            data=data
+        )
+        users = await query_network_users(
+            data=data
+        )
+        repositories = data.get("repositories")
+
+        opening_records: list[Any] = []
+        closing_records: list[Any] = []
+
+        if repositories is not None:
+            opening_repository = getattr(
+                repositories,
+                "openings",
+                None,
+            )
+            closing_repository = getattr(
+                repositories,
+                "closings",
+                None,
+            )
+
+            # Use the same local business date as the existing
+            # opening/closing handlers.
+            from app.handlers.opening import now_local
+
+            business_date = now_local().date()
+
+            if opening_repository is not None:
+                opening_records = (
+                    await opening_repository.get_for_date(
+                        business_date=business_date,
+                    )
+                )
+
+        if repositories is not None:
+            if closing_repository is not None:
+                closing_records = (
+                    await closing_repository.get_for_date(
+                        business_date=business_date,
+                    )
+                )
+
+    else:
+        (
+            stores,
+            bushes,
+            clusters,
+            users,
+            opening_records,
+            closing_records,
+        ) = fast_data
+
     active_stores = [
         store
         for store in stores
@@ -1534,44 +1699,6 @@ async def build_root_dashboard(
             store
         )
     ]
-
-    repositories = data.get("repositories")
-
-    opening_records: list[Any] = []
-    closing_records: list[Any] = []
-
-    if repositories is not None:
-        opening_repository = getattr(
-            repositories,
-            "openings",
-            None,
-        )
-        closing_repository = getattr(
-            repositories,
-            "closings",
-            None,
-        )
-
-        # Use the same local business date as the existing
-        # opening/closing handlers.
-        from app.handlers.opening import now_local
-
-        business_date = now_local().date()
-
-        if opening_repository is not None:
-            opening_records = (
-                await opening_repository.get_for_date(
-                    business_date=business_date,
-                )
-            )
-
-    if repositories is not None:
-        if closing_repository is not None:
-            closing_records = (
-                await closing_repository.get_for_date(
-                    business_date=business_date,
-                )
-            )
 
     openings_by_store = {
         int(record.store_id): record
