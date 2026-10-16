@@ -1091,8 +1091,10 @@ async def build_root_store_item(
         store
     )
 
-    opened = opening_exists(
-        opening
+    opened = (
+        getattr(opening, "actual_open_time", None) is not None
+        if preloaded
+        else opening_exists(opening)
     )
 
     late_minutes = (
@@ -1103,12 +1105,19 @@ async def build_root_store_item(
         else 0
     )
 
-    closing_started = closing_exists(
-        closing
+    closing_started = (
+        (
+            getattr(closing, "cash_amount", None) is not None
+            or bool(getattr(closing, "receipt_file_id", None))
+        )
+        if preloaded
+        else closing_exists(closing)
     )
 
-    closed = result_is_completed(
-        closing
+    closed = (
+        getattr(closing, "actual_submitted_at", None) is not None
+        if preloaded
+        else result_is_completed(closing)
     )
 
     if not active:
@@ -1118,7 +1127,9 @@ async def build_root_store_item(
         state = RootStoreState.CLOSED
 
     elif context == "closing":
-        if closing_started:
+        if not opened:
+            state = RootStoreState.WAITING_OPENING
+        elif closing_started:
             state = (
                 RootStoreState
                 .CLOSING_IN_PROGRESS
@@ -1216,6 +1227,49 @@ async def build_root_store_items(
         and closings_by_store is not None
         and clusters_by_id is not None
     )
+
+    if not preloaded and stores:
+        repositories = data.get("repositories")
+
+        if repositories is not None:
+            opening_repo = getattr(repositories, "openings", None)
+            closing_repo = getattr(repositories, "closings", None)
+
+            if opening_repo is not None and closing_repo is not None:
+                from app.handlers.opening import now_local
+
+                business_date = now_local().date()
+
+                opening_records = await opening_repo.get_for_date(
+                    business_date=business_date,
+                )
+                closing_records = await closing_repo.get_for_date(
+                    business_date=business_date,
+                    lightweight=True,
+                )
+                clusters = await query_clusters(data=data)
+
+                openings_by_store = {
+                    int(row.store_id): row
+                    for row in opening_records
+                }
+                closings_by_store = {
+                    int(row.store_id): row
+                    for row in closing_records
+                }
+                clusters_by_id = {
+                    object_id(cluster): cluster
+                    for cluster in clusters
+                }
+
+                preloaded = True
+
+                logger.info(
+                    "ROOT BULK LOADED | openings=%s closings=%s clusters=%s",
+                    len(opening_records),
+                    len(closing_records),
+                    len(clusters),
+                )
 
     result: list[RootStoreItem] = []
 
@@ -3641,48 +3695,21 @@ async def show_closing_list(
         )
     ]
 
-    if missing_only:
-        filtered: list[Any] = []
-
-        for store in stores:
-            store_id = object_id(
-                store
-            )
-
-            opening = await get_opening_status(
-                store_id=store_id,
-                user=user,
-                data=data,
-            )
-
-            if not opening_exists(
-                opening
-            ):
-                continue
-
-            closing = await get_closing_status(
-                store_id=store_id,
-                user=user,
-                data=data,
-            )
-
-            if result_is_completed(
-                closing
-            ):
-                continue
-
-            filtered.append(
-                store
-            )
-
-        stores = filtered
-
     items = await build_root_store_items(
         stores=stores,
         user=user,
         data=data,
         context="closing",
     )
+
+    if missing_only:
+        items = [
+            item for item in items
+            if item.state in {
+                RootStoreState.WAITING_CLOSING,
+                RootStoreState.CLOSING_IN_PROGRESS,
+            }
+        ]
 
     (
         page_items,
