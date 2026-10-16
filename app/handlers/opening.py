@@ -964,6 +964,7 @@ async def register_opening(
 
         "manual": manual,
         "is_manual": manual,
+        "update_summaries": False,
     }
 
     method_names = (
@@ -1159,6 +1160,22 @@ def status_exists(
 
     if result is None:
         return False
+
+    nested = first_attr(
+        result,
+        "checkin",
+        "opening",
+        "record",
+        default=None,
+    )
+
+    candidate = nested if nested is not None else result
+
+    if isinstance(candidate, dict):
+        if "actual_open_time" in candidate:
+            return candidate["actual_open_time"] is not None
+    elif hasattr(candidate, "actual_open_time"):
+        return getattr(candidate, "actual_open_time") is not None
 
     explicit = first_attr(
         result,
@@ -1710,6 +1727,8 @@ async def opening_confirm_callback(
     Фактичний check-in.
     """
 
+    accepted_at = now_local()
+
     user = get_database_user(
         data
     )
@@ -1787,6 +1806,7 @@ async def opening_confirm_callback(
             store_id=store_id,
             user=user,
             data=data,
+            opened_at=accepted_at,
         )
 
     except Exception:
@@ -1843,6 +1863,63 @@ async def opening_confirm_callback(
         )
 
         return
+
+    # Confirm DB transaction before telling the seller it succeeded.
+    session = (
+        data.get("session")
+        or data.get("db_session")
+    )
+
+    failure_text = (
+        "\u274c <b>\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f "
+        "\u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438 "
+        "\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0442\u044f.</b>\n\n"
+        "\u0421\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 "
+        "\u0449\u0435 \u0440\u0430\u0437."
+    )
+
+    if session is None:
+        logger.error(
+            "Opening DB session missing | store_id=%s",
+            store_id,
+        )
+        await safe_edit(
+            callback,
+            text=failure_text,
+            reply_markup=opening_prepare_keyboard(
+                store_id=store_id
+            ),
+        )
+        return
+
+    try:
+        await session.commit()
+    except Exception:
+        logger.exception(
+            "Opening commit failed | store_id=%s",
+            store_id,
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            logger.exception(
+                "Opening rollback failed | store_id=%s",
+                store_id,
+            )
+
+        await safe_edit(
+            callback,
+            text=failure_text,
+            reply_markup=opening_prepare_keyboard(
+                store_id=store_id
+            ),
+        )
+        return
+
+    logger.info(
+        "Opening committed | store_id=%s",
+        store_id,
+    )
 
     if result_already_exists(
         result

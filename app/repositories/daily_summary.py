@@ -13,7 +13,7 @@ from sqlalchemy.orm import InstrumentedAttribute, lazyload
 from app.database.models.daily_summary import (
     DailySummaryMessage,
 )
-from app.database.models.enums import SummaryType
+from app.database.models.enums import NotificationStatus, SummaryType
 from app.repositories.base import BaseRepository
 
 
@@ -515,6 +515,21 @@ class DailySummaryRepository(
             value=snapshot_json,
         )
 
+        pending_details = dict(summary.details_json or {})
+
+        if should_send or should_edit:
+            pending_details["_summary_pending_message_text"] = normalized_text
+
+            if snapshot_json is not None:
+                pending_details["_summary_pending_snapshot"] = snapshot_json
+            else:
+                pending_details.pop("_summary_pending_snapshot", None)
+        else:
+            pending_details.pop("_summary_pending_message_text", None)
+            pending_details.pop("_summary_pending_snapshot", None)
+
+        summary.details_json = pending_details
+
         self.session.add(summary)
         await self.session.flush()
 
@@ -761,6 +776,8 @@ class DailySummaryRepository(
                 "failed_attempts",
             ),
         )
+
+        summary.status = NotificationStatus.FAILED
 
         self.session.add(summary)
         await self.session.flush()
@@ -1267,7 +1284,15 @@ class DailySummaryRepository(
             value=None,
         )
 
+        details = summary.details_json
+        if isinstance(details, dict):
+            cleaned = dict(details)
+            cleaned.pop("_summary_pending_message_text", None)
+            cleaned.pop("_summary_pending_snapshot", None)
+            summary.details_json = cleaned
+
         if action == "sent":
+            summary.status = NotificationStatus.SENT
             self.set_first_available_value(
                 summary,
                 names=(
@@ -1278,6 +1303,7 @@ class DailySummaryRepository(
             )
 
         elif action == "edited":
+            summary.status = NotificationStatus.EDITED
             self.set_first_available_value(
                 summary,
                 names=(

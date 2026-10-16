@@ -1264,6 +1264,14 @@ class SummaryService:
             ):
                 return value.strip()
 
+        details = getattr(summary, "details_json", None)
+        if isinstance(details, dict):
+            pending_text = details.get(
+                "_summary_pending_message_text"
+            )
+            if isinstance(pending_text, str) and pending_text.strip():
+                return pending_text.strip()
+
         if summary.message_id is None:
             for field_name in (
                 "message_text",
@@ -1303,6 +1311,14 @@ class SummaryService:
 
             if isinstance(value, dict):
                 return dict(value)
+
+        details = getattr(summary, "details_json", None)
+        if isinstance(details, dict):
+            pending_snapshot = details.get(
+                "_summary_pending_snapshot"
+            )
+            if isinstance(pending_snapshot, dict):
+                return dict(pending_snapshot)
 
         if summary.message_id is None:
             for field_name in (
