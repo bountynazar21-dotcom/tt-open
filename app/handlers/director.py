@@ -617,20 +617,25 @@ def store_name(
 # =========================================================
 
 
+
 async def _prime_bush_status_cache(
     *,
     data: dict[str, Any],
 ) -> None:
     """
-    Bulk preload today's opening/closing records
-    for bush-admin screens.
-
-    ???? ??????????? ???? ??? ?? Telegram update.
+    ?????????? ??? opening/closing ??????
+    ????????? ??? ????? SQL-????????.
     """
 
-    from app.utils.datetime import (
-        today_local,
+    from sqlalchemy import select
+
+    from app.database.models.closing_report import (
+        ClosingReport,
     )
+    from app.database.models.opening_checkin import (
+        OpeningCheckin,
+    )
+    from app.utils.datetime import today_local
 
     today = today_local()
 
@@ -642,109 +647,88 @@ async def _prime_bush_status_cache(
     ):
         return
 
-    repositories = data.get(
-        "repositories"
+    session = (
+        data.get("session")
+        or data.get("db_session")
     )
 
-    if repositories is None:
-        return
-
-    openings_repository = getattr(
-        repositories,
-        "openings",
-        None,
-    )
-
-    closings_repository = getattr(
-        repositories,
-        "closings",
-        None,
-    )
-
-    openings_getter = getattr(
-        openings_repository,
-        "get_for_date",
-        None,
-    )
-
-    closings_getter = getattr(
-        closings_repository,
-        "get_for_date",
-        None,
-    )
-
-    if (
-        not callable(openings_getter)
-        or not callable(closings_getter)
-    ):
+    if session is None:
+        logger.warning(
+            "Bush bulk cache: session unavailable"
+        )
         return
 
     try:
-        opening_rows = await openings_getter(
-            business_date=today,
+        opening_result = await session.scalars(
+            select(
+                OpeningCheckin
+            ).where(
+                OpeningCheckin.business_date
+                == today
+            )
         )
 
-        closing_rows = await closings_getter(
-            business_date=today,
+        closing_result = await session.scalars(
+            select(
+                ClosingReport
+            ).where(
+                ClosingReport.business_date
+                == today
+            )
+        )
+
+        opening_rows = list(
+            opening_result.unique().all()
+        )
+
+        closing_rows = list(
+            closing_result.unique().all()
         )
 
     except Exception:
         logger.exception(
-            "Bush admin bulk status preload failed | "
-            "date=%s",
+            "Bush direct bulk status preload "
+            "failed | date=%s",
             today,
         )
         return
 
-    opening_by_store: dict[
-        int,
-        Any,
-    ] = {}
-
-    for row in opening_rows:
-        store_id = to_int(
-            first_attr(
-                row,
-                "store_id",
-                default=0,
-            )
-        )
-
-        if store_id > 0:
-            opening_by_store[
-                store_id
-            ] = row
-
-    closing_by_store: dict[
-        int,
-        Any,
-    ] = {}
-
-    for row in closing_rows:
-        store_id = to_int(
-            first_attr(
-                row,
-                "store_id",
-                default=0,
-            )
-        )
-
-        if store_id > 0:
-            closing_by_store[
-                store_id
-            ] = row
-
     data[
         "_bush_opening_by_store"
-    ] = opening_by_store
+    ] = {
+        int(row.store_id): row
+        for row in opening_rows
+        if getattr(
+            row,
+            "store_id",
+            None,
+        ) is not None
+    }
 
     data[
         "_bush_closing_by_store"
-    ] = closing_by_store
+    ] = {
+        int(row.store_id): row
+        for row in closing_rows
+        if getattr(
+            row,
+            "store_id",
+            None,
+        ) is not None
+    }
 
     data[
         "_bush_status_cache_date"
     ] = today
+
+    logger.info(
+        "Bush bulk cache ready | "
+        "date=%s openings=%s closings=%s",
+        today,
+        len(opening_rows),
+        len(closing_rows),
+    )
+
 
 
 async def get_store_runtime_state(
