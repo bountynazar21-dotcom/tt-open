@@ -691,6 +691,7 @@ async def get_closing_status(
             else None
         ),
 
+        "business_date": today,
         "date": today,
         "work_date": today,
         "target_date": today,
