@@ -974,6 +974,7 @@ class OpeningService:
                     scheduled_for=queued_at,
                     message_text=message_text,
                     payload_json={
+                        "parse_mode": "HTML",
                         "checkin_id": (
                             checkin.id
                         ),
