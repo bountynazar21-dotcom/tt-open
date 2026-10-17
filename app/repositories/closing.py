@@ -644,15 +644,17 @@ class ClosingRepository(
         )
 
         conditions = [
-            ClosingReport.business_date
-            == target_date,
-            ClosingReport.actual_submitted_at
-            .is_(None),
-            ClosingReport.control_deadline
-            <= target_time,
-            ClosingReport.status
-            == ClosingStatus.WAITING,
+            ClosingReport.business_date == target_date,
+            ClosingReport.actual_submitted_at.is_(None),
+            ClosingReport.status == ClosingStatus.WAITING,
         ]
+
+        if target_date == current_local.date():
+            conditions.append(
+                ClosingReport.control_deadline <= target_time
+            )
+        elif target_date > current_local.date():
+            return []
 
         statement = (
             select(ClosingReport)

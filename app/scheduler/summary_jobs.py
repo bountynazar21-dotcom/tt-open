@@ -8,9 +8,13 @@ from aiogram import Bot
 
 from app.config import settings
 from app.database.session import async_session_factory
+from app.database.models.enums import SummaryType
 from app.repositories import Repositories
 from app.scheduler.locks import try_scheduler_lock
 from app.services import create_services
+
+
+from app.utils.datetime import closing_business_date
 
 
 logger = logging.getLogger(__name__)
@@ -221,7 +225,7 @@ async def process_closing_summaries_job(
             decisions = (
                 await services.closing
                 .prepare_summary_updates(
-                    business_date=current_time.date(),
+                    business_date=closing_business_date(current_time, settings.timezone),
                     bush_ids=set(),
                     timezone_name=settings.timezone,
                     include_network=True,
@@ -246,7 +250,7 @@ async def process_closing_summaries_job(
             logger.info(
                 "Closing lightweight live summary | "
                 "date=%s total=%s failed=%s",
-                current_time.date(),
+                closing_business_date(current_time, settings.timezone),
                 result.total_count,
                 result.failed_count,
             )
@@ -307,7 +311,7 @@ async def final_closing_recount_job(
             current_time = now_local()
 
             business_date = (
-                current_time.date()
+                closing_business_date(current_time, settings.timezone)
             )
 
             await (
@@ -461,37 +465,51 @@ async def recover_pending_summaries_job(
 
             current_time = now_local()
 
-            result = (
-                await services.summaries
-                .process_pending_for_date(
-                    business_date=current_time.date(),
-                    limit=500,
-                    commit_each=True,
-                )
+            opening_day = current_time.date()
+            closing_day = closing_business_date(
+                current_time, settings.timezone
+            )
+
+            opening_result = await services.summaries.process_pending_for_date(
+                business_date=opening_day,
+                summary_types={
+                    SummaryType.BUSH_OPENING,
+                    SummaryType.NETWORK_OPENING,
+                },
+                limit=500,
+                commit_each=True,
+            )
+
+            closing_result = await services.summaries.process_pending_for_date(
+                business_date=closing_day,
+                summary_types={
+                    SummaryType.BUSH_CLOSING,
+                    SummaryType.NETWORK_CLOSING,
+                },
+                limit=500,
+                commit_each=True,
             )
 
             await session.commit()
 
-            if result.total_count == 0:
+            if (
+                opening_result.total_count == 0
+                and closing_result.total_count == 0
+            ):
                 return
 
             logger.info(
                 "Pending summaries recovered | "
-                "date=%s total=%s sent=%s "
-                "edited=%s recreated=%s "
-                "unchanged=%s retry=%s "
-                "failed=%s skipped=%s",
-                current_time.date(),
-                result.total_count,
-                result.sent_count,
-                result.edited_count,
-                result.recreated_count,
-                result.unchanged_count,
-                result.retry_count,
-                result.failed_count,
-                result.skipped_count,
+                "opening_date=%s closing_date=%s "
+                "opening_total=%s closing_total=%s "
+                "opening_failed=%s closing_failed=%s",
+                opening_day,
+                closing_day,
+                opening_result.total_count,
+                closing_result.total_count,
+                opening_result.failed_count,
+                closing_result.failed_count,
             )
-
         except Exception:
             await session.rollback()
 

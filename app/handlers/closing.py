@@ -71,6 +71,9 @@ from app.keyboards.store import (
 )
 
 
+from app.utils.datetime import closing_business_date
+
+
 logger = logging.getLogger(
     __name__
 )
@@ -673,7 +676,7 @@ async def get_closing_status(
     if service is None:
         return None
 
-    today = now_local().date()
+    today = closing_business_date(now_local())
 
     payload = {
         "store_id": store_id,
@@ -840,10 +843,10 @@ async def start_closing(
             current_time,
 
         "work_date":
-            current_time.date(),
+            closing_business_date(current_time),
 
         "date":
-            current_time.date(),
+            closing_business_date(current_time),
     }
 
     last_error: Exception | None = None
@@ -3843,7 +3846,7 @@ async def closing_manual_time_handler(
     current_local = now_local()
 
     corrected_at = datetime.combine(
-        current_local.date(),
+        closing_business_date(current_local),
         parsed_time,
         tzinfo=KYIV_TZ,
     )

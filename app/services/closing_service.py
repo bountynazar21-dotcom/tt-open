@@ -39,6 +39,7 @@ from app.services.group_service import (
     GroupService,
     TelegramGroupTopic,
 )
+from app.utils.datetime import closing_business_date
 
 
 EnumType = TypeVar(
@@ -333,7 +334,7 @@ class ClosingService:
         report, _, _ = (
             await self.prepare_store_report(
                 store=store,
-                business_date=current_time.date(),
+                business_date=closing_business_date(current_time),
             )
         )
 
@@ -432,15 +433,7 @@ class ClosingService:
             or await self.get_timezone_name()
         )
 
-        business_date = (
-            current_time
-            .astimezone(
-                self.get_timezone(
-                    resolved_timezone
-                )
-            )
-            .date()
-        )
+        business_date = closing_business_date(current_time, resolved_timezone)
 
         report, schedule, _ = (
             await self.prepare_store_report(
@@ -512,15 +505,7 @@ class ClosingService:
             or await self.get_timezone_name()
         )
 
-        business_date = (
-            current_time
-            .astimezone(
-                self.get_timezone(
-                    resolved_timezone
-                )
-            )
-            .date()
-        )
+        business_date = closing_business_date(current_time, resolved_timezone)
 
         return (
             await self.repositories.closings
@@ -584,10 +569,6 @@ class ClosingService:
             or await self.get_timezone_name()
         )
 
-        timezone = self.get_timezone(
-            resolved_timezone
-        )
-
         if report_id is not None:
             pinned_report = (
                 await self.repositories.closings
@@ -607,11 +588,7 @@ class ClosingService:
             )
 
         else:
-            business_date = (
-                current_time
-                .astimezone(timezone)
-                .date()
-            )
+            business_date = closing_business_date(current_time, resolved_timezone)
 
         _, schedule, _ = (
             await self.prepare_store_report(
@@ -1287,15 +1264,7 @@ class ClosingService:
             or await self.get_timezone_name()
         )
 
-        timezone = self.get_timezone(
-            resolved_timezone
-        )
-
-        business_date = (
-            current_time
-            .astimezone(timezone)
-            .date()
-        )
+        business_date = closing_business_date(current_time, resolved_timezone)
 
         control_enabled = (
             await self.repositories.settings

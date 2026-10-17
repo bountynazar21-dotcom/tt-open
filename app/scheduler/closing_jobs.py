@@ -13,6 +13,9 @@ from app.scheduler.locks import try_scheduler_lock
 from app.services import create_services
 
 
+from app.utils.datetime import closing_business_date
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,7 +74,7 @@ async def prepare_closing_records_job(
                 await services.closing
                 .prepare_daily_records(
                     business_date=(
-                        current_time.date()
+                        closing_business_date(current_time, settings.timezone)
                     ),
                 )
             )
@@ -81,7 +84,7 @@ async def prepare_closing_records_job(
             logger.info(
                 "Closing records prepared | "
                 "date=%s result=%s",
-                current_time.date(),
+                closing_business_date(current_time, settings.timezone),
                 result,
             )
 
@@ -212,7 +215,7 @@ async def refresh_closing_summaries_job(
                 await services.closing
                 .prepare_all_closing_summaries(
                     business_date=(
-                        current_time.date()
+                        closing_business_date(current_time, settings.timezone)
                     ),
                     timezone_name=settings.timezone,
                 )
@@ -223,7 +226,7 @@ async def refresh_closing_summaries_job(
             logger.info(
                 "Closing summaries prepared | "
                 "date=%s updates=%s",
-                current_time.date(),
+                closing_business_date(current_time, settings.timezone),
                 len(updates),
             )
 

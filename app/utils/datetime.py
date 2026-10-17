@@ -93,6 +93,32 @@ def today_local(
 
 
 # =========================================================
+# CLOSING BUSINESS DATE
+# =========================================================
+
+CLOSING_DAY_ROLLOVER_HOUR = 6
+
+
+def closing_business_date(
+    current_time: datetime | None = None,
+    timezone_name: str = DEFAULT_TIMEZONE,
+) -> date:
+    """Keep evening reports on the prior day until 06:00."""
+
+    moment = current_time or now_local(timezone_name)
+
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("Timezone-aware datetime required.")
+
+    local = moment.astimezone(get_timezone(timezone_name))
+
+    if local.hour < CLOSING_DAY_ROLLOVER_HOUR:
+        return local.date() - timedelta(days=1)
+
+    return local.date()
+
+
+# =========================================================
 # AWARE / NAIVE
 # =========================================================
 
