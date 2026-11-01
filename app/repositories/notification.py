@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Iterable
+from typing import Any
 
 from sqlalchemy import (
     func,
@@ -467,40 +467,14 @@ class NotificationRepository(
     # РЕЗЕРВУВАННЯ ПЕРЕД НАДСИЛАННЯМ
     # ==========================================
 
-    async def reserve_for_sending(
+    async def _reserve_locked_notification(
         self,
         *,
-        dedupe_key: str,
+        notification: NotificationLog,
         attempted_at: datetime,
-        max_attempts: int = 5,
+        max_attempts: int,
     ) -> NotificationReservation:
-        """
-        Резервує повідомлення перед Telegram-запитом.
-
-        Запис блокується через SELECT FOR UPDATE.
-
-        Важливо:
-        Telegram-запит і mark_sent()/mark_failed()
-        потрібно виконати до commit поточної транзакції.
-        """
-
-        self.validate_aware_datetime(
-            attempted_at,
-            field_name="attempted_at",
-        )
-
-        if max_attempts <= 0:
-            raise ValueError(
-                "Максимальна кількість спроб "
-                "повинна бути більшою за нуль."
-            )
-
-        notification = (
-            await self.get_by_dedupe_key_or_raise(
-                dedupe_key,
-                for_update=True,
-            )
-        )
+        """Перевіряє та резервує вже заблокований запис."""
 
         if notification.status in self.DELIVERED_STATUSES:
             return NotificationReservation(
@@ -556,6 +530,45 @@ class NotificationRepository(
             reason="reserved",
         )
 
+    async def reserve_for_sending(
+        self,
+        *,
+        dedupe_key: str,
+        attempted_at: datetime,
+        max_attempts: int = 5,
+    ) -> NotificationReservation:
+        """
+        Резервує повідомлення перед Telegram-запитом.
+
+        Запис блокується через SELECT FOR UPDATE.
+        Telegram-запит і mark_sent()/mark_failed()
+        потрібно виконати до commit поточної транзакції.
+        """
+
+        self.validate_aware_datetime(
+            attempted_at,
+            field_name="attempted_at",
+        )
+
+        if max_attempts <= 0:
+            raise ValueError(
+                "Максимальна кількість спроб "
+                "повинна бути більшою за нуль."
+            )
+
+        notification = (
+            await self.get_by_dedupe_key_or_raise(
+                dedupe_key,
+                for_update=True,
+            )
+        )
+
+        return await self._reserve_locked_notification(
+            notification=notification,
+            attempted_at=attempted_at,
+            max_attempts=max_attempts,
+        )
+
     async def reserve_by_id(
         self,
         *,
@@ -563,20 +576,26 @@ class NotificationRepository(
         attempted_at: datetime,
         max_attempts: int = 5,
     ) -> NotificationReservation:
-        """Резервує повідомлення за ID."""
+        """Резервує повідомлення за ID без повторного SELECT."""
 
         self.validate_aware_datetime(
             attempted_at,
             field_name="attempted_at",
         )
 
+        if max_attempts <= 0:
+            raise ValueError(
+                "Максимальна кількість спроб "
+                "повинна бути більшою за нуль."
+            )
+
         notification = await self.get_by_id_or_raise(
             notification_id,
             for_update=True,
         )
 
-        return await self.reserve_for_sending(
-            dedupe_key=notification.dedupe_key,
+        return await self._reserve_locked_notification(
+            notification=notification,
             attempted_at=attempted_at,
             max_attempts=max_attempts,
         )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -19,7 +21,6 @@ from aiogram.exceptions import (
 from aiogram.types import Message
 
 from app.database.models.enums import (
-    NotificationStatus,
     NotificationType,
     UserStatus,
 )
@@ -134,6 +135,10 @@ class NotificationService:
     TELEGRAM_MESSAGE_LIMIT = 4096
     TELEGRAM_CAPTION_LIMIT = 1024
 
+    # Telegram group chats are limited to about 20 messages per minute.
+    GROUP_CHAT_MIN_INTERVAL_SECONDS = 3.1
+    PRIVATE_CHAT_MIN_INTERVAL_SECONDS = 1.05
+
     RETRYABLE_ERRORS = (
         TelegramRetryAfter,
         TelegramNetworkError,
@@ -148,6 +153,9 @@ class NotificationService:
         self.repositories = repositories
         self.session = repositories.session
         self.bot = bot
+        self._chat_send_locks: dict[int, asyncio.Lock] = {}
+        self._last_chat_send_at: dict[int, float] = {}
+        self._chat_blocked_until: dict[int, float] = {}
 
     # ==========================================
     # ДОДАВАННЯ ТЕКСТУ В ЧЕРГУ
@@ -434,6 +442,13 @@ class NotificationService:
             for notification in due_notifications
         ]
 
+        max_attempts = None
+        if notification_ids:
+            max_attempts = (
+                await self.repositories.settings
+                .get_notification_max_attempts()
+            )
+
         results: list[
             NotificationDeliveryResult
         ] = []
@@ -449,6 +464,7 @@ class NotificationService:
                             datetime.now(UTC)
                         ),
                         commit=commit_each,
+                        max_attempts=max_attempts,
                     )
                 )
 
@@ -518,6 +534,7 @@ class NotificationService:
         notification_id: int,
         current_time: datetime | None = None,
         commit: bool = True,
+        max_attempts: int | None = None,
     ) -> NotificationDeliveryResult:
         """Обробляє одне повідомлення за ID."""
 
@@ -530,10 +547,11 @@ class NotificationService:
             field_name="current_time",
         )
 
-        max_attempts = (
-            await self.repositories.settings
-            .get_notification_max_attempts()
-        )
+        if max_attempts is None:
+            max_attempts = (
+                await self.repositories.settings
+                .get_notification_max_attempts()
+            )
 
         reservation = (
             await self.repositories.notifications
@@ -721,7 +739,78 @@ class NotificationService:
         notification: NotificationLog,
         chat_id: int,
     ) -> Message:
-        """Вибирає спосіб надсилання."""
+        """Надсилає повідомлення з лімітом частоти для кожного чату."""
+
+        lock = self._chat_send_locks.get(chat_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._chat_send_locks[chat_id] = lock
+
+        async with lock:
+            await self.wait_for_chat_rate_limit(chat_id)
+
+            try:
+                return await self._dispatch_unthrottled(
+                    notification=notification,
+                    chat_id=chat_id,
+                )
+            except TelegramRetryAfter as error:
+                blocked_until = (
+                    time.monotonic()
+                    + float(error.retry_after)
+                )
+                self._chat_blocked_until[chat_id] = max(
+                    self._chat_blocked_until.get(chat_id, 0.0),
+                    blocked_until,
+                )
+                raise
+
+    async def wait_for_chat_rate_limit(
+        self,
+        chat_id: int,
+    ) -> None:
+        """Забезпечує інтервал між відправленнями в один Telegram-чат."""
+
+        interval = (
+            self.GROUP_CHAT_MIN_INTERVAL_SECONDS
+            if chat_id < 0
+            else self.PRIVATE_CHAT_MIN_INTERVAL_SECONDS
+        )
+
+        now = time.monotonic()
+        last_sent_at = self._last_chat_send_at.get(chat_id)
+
+        interval_delay = (
+            interval - (now - last_sent_at)
+            if last_sent_at is not None
+            else 0.0
+        )
+        retry_after_delay = (
+            self._chat_blocked_until.get(chat_id, 0.0)
+            - now
+        )
+        delay = max(
+            interval_delay,
+            retry_after_delay,
+            0.0,
+        )
+
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+        sent_at = time.monotonic()
+        self._last_chat_send_at[chat_id] = sent_at
+
+        if self._chat_blocked_until.get(chat_id, 0.0) <= sent_at:
+            self._chat_blocked_until.pop(chat_id, None)
+
+    async def _dispatch_unthrottled(
+        self,
+        *,
+        notification: NotificationLog,
+        chat_id: int,
+    ) -> Message:
+        """Вибирає спосіб надсилання без повторного rate-limit."""
 
         payload = self.get_payload(notification)
 

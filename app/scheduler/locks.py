@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-
+from app.database.session import engine
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,58 @@ async def try_scheduler_lock(
     return acquired
 
 
+@asynccontextmanager
+async def scheduler_lock_guard(
+    *,
+    lock_id: int | None = None,
+) -> AsyncIterator[bool]:
+    """
+    Тримає transaction-scoped advisory lock на окремому з'єднанні.
+
+    Це потрібно для job, які commit-ять робочі дані частинами:
+    commit робочої AsyncSession не звільняє цей lock.
+    """
+
+    if not settings.enable_scheduler_lock:
+        yield True
+        return
+
+    resolved_lock_id = (
+        lock_id
+        if lock_id is not None
+        else settings.scheduler_lock_id
+    )
+
+    async with engine.connect() as connection:
+        try:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT pg_try_advisory_xact_lock(
+                        :lock_id
+                    )
+                    """
+                ),
+                {
+                    "lock_id": resolved_lock_id,
+                },
+            )
+
+            acquired = bool(result.scalar_one())
+
+            if not acquired:
+                logger.debug(
+                    "Scheduler lock %s already held",
+                    resolved_lock_id,
+                )
+
+            yield acquired
+
+        finally:
+            if connection.in_transaction():
+                await connection.rollback()
+
+
 async def require_scheduler_lock(
     session: AsyncSession,
     *,
@@ -96,5 +150,6 @@ async def require_scheduler_lock(
 
 __all__ = [
     "try_scheduler_lock",
+    "scheduler_lock_guard",
     "require_scheduler_lock",
 ]
