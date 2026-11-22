@@ -809,6 +809,48 @@ async def query_network_users(
         )
         return []
 
+async def _prime_director_bush_cache(
+    *,
+    stores: list[Any],
+    data: dict[str, Any],
+) -> None:
+    """Bulk-load bush names used by a Director store list."""
+    if data.get("_director_bush_cache_ready"):
+        return
+
+    bush_ids = {
+        store_bush_id(store)
+        for store in stores
+        if store_bush_id(store) > 0
+    }
+    if not bush_ids:
+        data["_director_bush_by_id"] = {}
+        data["_director_bush_cache_ready"] = True
+        return
+
+    session = data.get("session") or data.get("db_session")
+    if session is None:
+        return
+
+    from sqlalchemy import select
+    from app.database.models.bush import Bush
+
+    try:
+        result = await session.scalars(
+            select(Bush).where(Bush.id.in_(bush_ids))
+        )
+        bushes = list(result.unique().all())
+    except Exception:
+        logger.exception("Director bulk bush preload failed")
+        return
+
+    data["_director_bush_by_id"] = {
+        int(bush.id): bush
+        for bush in bushes
+    }
+    data["_director_bush_cache_ready"] = True
+
+
 async def store_bush_name(
     *,
     store: Any,
@@ -825,10 +867,16 @@ async def store_bush_name(
     if bush_id <= 0:
         return None
 
-    bush = await load_bush(
-        bush_id=bush_id,
-        data=data,
-    )
+    if data.get("_director_bush_cache_ready"):
+        bush = data.get(
+            "_director_bush_by_id",
+            {},
+        ).get(bush_id)
+    else:
+        bush = await load_bush(
+            bush_id=bush_id,
+            data=data,
+        )
 
     if bush is not None:
         value = first_attr(
@@ -1146,6 +1194,10 @@ async def build_director_store_items(
     """
 
     await _prime_director_status_cache(
+        data=data,
+    )
+    await _prime_director_bush_cache(
+        stores=stores,
         data=data,
     )
 
@@ -2887,6 +2939,10 @@ async def director_missing_closing_callback(
     ]
 
     await _prime_director_status_cache(
+        data=data,
+    )
+    await _prime_director_bush_cache(
+        stores=stores,
         data=data,
     )
 
