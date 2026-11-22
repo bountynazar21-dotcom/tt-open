@@ -376,7 +376,7 @@ async def test_prepare_many_summaries_uses_one_locked_read_for_six_bushes() -> N
     ]
     for index, summary in enumerate(summaries, start=1):
         summary.message_id = 1000 + index
-        summary.content_hash = DailySummaryRepository.build_content_hash("previous")
+        summary.message_text = "previous"
 
     session = SimpleNamespace(
         scalars=AsyncMock(return_value=FakeScalarResult(summaries)),
