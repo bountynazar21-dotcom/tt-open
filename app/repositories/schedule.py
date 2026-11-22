@@ -164,15 +164,26 @@ class ScheduleRepository:
         self,
         store_id: int,
         *,
+        weekdays: set[int] | None = None,
         for_update: bool = False,
     ) -> list[StoreSchedule]:
-        """Повертає весь тижневий графік ТТ."""
+        """Повертає весь або вибрані дні графіка ТТ."""
+
+        conditions = [
+            StoreSchedule.store_id == store_id
+        ]
+        if weekdays is not None:
+            for weekday in weekdays:
+                self.validate_weekday(weekday)
+            if not weekdays:
+                return []
+            conditions.append(
+                StoreSchedule.weekday.in_(weekdays)
+            )
 
         statement = (
             select(StoreSchedule)
-            .where(
-                StoreSchedule.store_id == store_id
-            )
+            .where(*conditions)
             .order_by(
                 StoreSchedule.weekday.asc()
             )
