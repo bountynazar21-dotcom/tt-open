@@ -919,7 +919,7 @@ async def _prime_director_status_cache(
     from app.database.models.opening_checkin import (
         OpeningCheckin,
     )
-    from app.utils.datetime import today_local
+    from app.utils.datetime import closing_business_date, now_local, today_local
 
     today = today_local()
     closing_date = closing_business_date(now_local())
