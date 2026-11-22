@@ -1607,6 +1607,103 @@ class ClosingRepository(
     # СТАТИСТИКА
     # ==========================================
 
+
+    async def get_summary_data_by_bush(
+        self,
+        *,
+        business_date: date,
+        bush_ids: set[int],
+    ) -> dict[int, dict[str, Any]]:
+        """Loads all bush closing summary rows and statistics in one query."""
+        if not bush_ids:
+            return {}
+
+        grouped: dict[int, dict[str, Any]] = {
+            bush_id: {
+                "counts": {status: 0 for status in ClosingStatus},
+                "problem_reports": [],
+                "waiting_reports": [],
+                "cash_values": [],
+            }
+            for bush_id in bush_ids
+        }
+        statement = (
+            select(ClosingReport, Store.bush_id)
+            .join(Store, Store.id == ClosingReport.store_id)
+            .where(
+                ClosingReport.business_date == business_date,
+                Store.bush_id.in_(bush_ids),
+            )
+            .order_by(Store.store_number.asc())
+        )
+        result = await self.session.execute(statement)
+
+        for report, bush_id in result.all():
+            if bush_id is None:
+                continue
+            data = grouped.get(int(bush_id))
+            if data is None:
+                continue
+            data["counts"][report.status] += 1
+            if report.status in self.PROBLEM_STATUSES:
+                data["problem_reports"].append(report)
+            if (
+                report.status == ClosingStatus.WAITING
+                and report.actual_submitted_at is None
+            ):
+                data["waiting_reports"].append(report)
+            if (
+                report.status in self.SUBMITTED_STATUSES
+                and report.cash_amount is not None
+            ):
+                data["cash_values"].append(
+                    Decimal(str(report.cash_amount))
+                )
+
+        statistics_by_bush: dict[int, dict[str, int | float | Decimal]] = {}
+        for bush_id, data in grouped.items():
+            counts = data["counts"]
+            expected_count = sum(
+                count
+                for status, count in counts.items()
+                if status not in self.EXCLUDED_STATUSES
+            )
+            submitted_count = sum(
+                counts[status]
+                for status in self.SUBMITTED_STATUSES
+            )
+            late_count = counts[ClosingStatus.SUBMITTED_LATE]
+            missed_count = counts[ClosingStatus.MISSED_DEADLINE]
+            cash_values = data["cash_values"]
+            total_cash = sum(cash_values, Decimal("0"))
+            average_cash = (
+                total_cash / len(cash_values)
+                if cash_values
+                else Decimal("0")
+            )
+            statistics_by_bush[bush_id] = {
+                "expected_count": expected_count,
+                "submitted_count": submitted_count,
+                "submitted_on_time_count": counts[ClosingStatus.SUBMITTED_ON_TIME],
+                "submitted_late_count": late_count,
+                "manually_confirmed_count": counts[ClosingStatus.MANUALLY_CONFIRMED],
+                "waiting_count": counts[ClosingStatus.WAITING],
+                "missed_count": missed_count,
+                "problem_count": late_count + missed_count,
+                "total_cash": total_cash.quantize(Decimal("0.01")),
+                "average_cash": average_cash.quantize(Decimal("0.01")),
+                "maximum_cash": max(cash_values, default=Decimal("0")).quantize(Decimal("0.01")),
+                "minimum_cash": min(cash_values, default=Decimal("0")).quantize(Decimal("0.01")),
+                "completion_percent": (
+                    round(submitted_count / expected_count * 100, 2)
+                    if expected_count
+                    else 0.0
+                ),
+            }
+            grouped[bush_id]["statistics"] = statistics_by_bush[bush_id]
+
+        return grouped
+
     async def count_by_status(
         self,
         *,
