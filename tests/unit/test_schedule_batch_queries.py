@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.database.models.enums import StoreStatus, UserRole, UserStatus
+from app.database.models.enums import ClosingStatus, StoreStatus, UserRole, UserStatus
+from app.repositories.closing import ClosingRepository
 from app.repositories.schedule import ScheduleRepository
+from app.services.group_service import GroupService
 from app.services.closing_service import ClosingService
 from app.services.opening_service import OpeningService
 
@@ -146,4 +148,77 @@ async def test_alert_recipients_are_loaded_in_two_queries_for_store_batch(
         for store_id, recipients in result.items()
     )
     session.execute.assert_awaited_once()
+    session.scalars.assert_awaited_once()
+
+
+class FakeMappings:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+    def mappings(self) -> FakeMappings:
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        return self.rows
+
+
+@pytest.mark.asyncio
+async def test_closing_statistics_for_all_bushes_use_one_query() -> None:
+    row: dict[str, object] = {
+        "bush_id": 3,
+        "total_cash": 1250,
+        "average_cash": 250,
+        "maximum_cash": 500,
+        "minimum_cash": 100,
+    }
+    for status in ClosingStatus:
+        row[f"count_{status.name.lower()}"] = 0
+    row["count_waiting"] = 2
+    row["count_submitted_on_time"] = 3
+    row["count_submitted_late"] = 1
+    row["count_missed_deadline"] = 1
+
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=FakeMappings([row]))
+    )
+    repository = object.__new__(ClosingRepository)
+    repository.session = session
+
+    result = await repository.get_daily_statistics_by_bush(
+        business_date=date(2026, 11, 23)
+    )
+
+    stats = result[3]
+    assert stats["expected_count"] == 7
+    assert stats["submitted_count"] == 4
+    assert stats["waiting_count"] == 2
+    assert stats["missed_count"] == 1
+    assert stats["total_cash"] == 1250
+    assert stats["average_cash"] == 250
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_group_integer_settings_are_loaded_in_one_query() -> None:
+    settings = [
+        SimpleNamespace(key="telegram_groups_bush_1_chat_id", value="-1001"),
+        SimpleNamespace(key="telegram_groups_bush_1_summaries_thread_id", value="15"),
+        SimpleNamespace(key="telegram_groups_bush_2_chat_id", value="not-an-int"),
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(settings))
+    )
+    service = object.__new__(GroupService)
+    service.session = session
+
+    result = await service.get_int_settings({
+        "telegram_groups_bush_1_chat_id",
+        "telegram_groups_bush_1_summaries_thread_id",
+        "telegram_groups_bush_2_chat_id",
+    })
+
+    assert result == {
+        "telegram_groups_bush_1_chat_id": -1001,
+        "telegram_groups_bush_1_summaries_thread_id": 15,
+    }
     session.scalars.assert_awaited_once()
