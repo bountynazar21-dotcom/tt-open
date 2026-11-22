@@ -1254,6 +1254,8 @@ class OpeningService:
             bush_chat_setting_keys
         )
 
+        bush_summary_items: list[dict[str, Any]] = []
+
         for bush_id in sorted(target_bush_ids):
             bush = bushes_by_id.get(bush_id)
 
@@ -1287,25 +1289,23 @@ class OpeningService:
             if target_chat_id is None:
                 continue
 
-            decision = (
-                await self.repositories
-                .daily_summaries
-                .prepare_update(
-                    summary_type=(
-                        bush_summary_type
-                    ),
-                    business_date=(
-                        business_date
-                    ),
-                    chat_id=target_chat_id,
-                    bush_id=bush.id,
-                    topic_id=topic_id,
-                    message_text=message_text,
-                    snapshot_json=snapshot,
+            bush_summary_items.append({
+                "chat_id": target_chat_id,
+                "bush_id": bush.id,
+                "topic_id": topic_id,
+                "message_text": message_text,
+                "snapshot_json": snapshot,
+            })
+
+        if bush_summary_items:
+            decisions.extend(
+                await self.repositories.daily_summaries
+                .prepare_updates_many(
+                    summary_type=bush_summary_type,
+                    business_date=business_date,
+                    items=bush_summary_items,
                 )
             )
-
-            decisions.append(decision)
 
         network_summary_type = (
             self.resolve_summary_type(
