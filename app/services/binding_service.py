@@ -706,6 +706,7 @@ class BindingService:
                 await self.get_bush_binding(
                     user_id=target.id,
                     bush_id=bush.id,
+                    role=role,
                     active_only=False,
                     for_update=True,
                 )
@@ -2098,6 +2099,7 @@ class BindingService:
         *,
         user_id: int,
         bush_id: int,
+        role: UserRole | None = None,
         active_only: bool,
         for_update: bool,
     ) -> Any | None:
@@ -2114,6 +2116,7 @@ class BindingService:
             ),
             user_id=user_id,
             bush_id=bush_id,
+            role=role,
             active_only=active_only,
             for_update=for_update,
         )
