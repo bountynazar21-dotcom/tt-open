@@ -16,6 +16,7 @@ from app.repositories.schedule import ScheduleRepository
 from app.services.group_service import GroupService
 from app.services.closing_service import ClosingService
 from app.services.bush_service import BushService
+from app.services.cluster_service import ClusterService
 from app.services.store_service import StoreService
 from app.services.opening_service import OpeningService
 
@@ -454,3 +455,56 @@ async def test_bulk_bush_lookup_uses_one_query_for_names_and_codes() -> None:
 
     assert [bush.id for bush in result] == [1, 2, 3, 4, 5, 6]
     session.scalars.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_count", [50, 85])
+async def test_bulk_cluster_assignment_locks_all_stores_in_one_query(
+    store_count: int,
+) -> None:
+    stores = [
+        SimpleNamespace(
+            id=store_id,
+            cluster_id=None,
+        )
+        for store_id in range(1, store_count + 1)
+    ]
+    assignment_results = [
+        SimpleNamespace(
+            was_changed=True,
+            previous_cluster_id=None,
+            current_cluster_id=7,
+        )
+        for _ in stores
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(stores))
+    )
+    service = object.__new__(ClusterService)
+    service.session = session
+    service.get_cluster_or_raise = AsyncMock(
+        return_value=SimpleNamespace(id=7, is_active=True)
+    )
+    service.assign_store = AsyncMock(side_effect=assignment_results)
+
+    result = await service.bulk_assign_stores(
+        actor=SimpleNamespace(id=1),
+        store_ids=list(range(1, store_count + 1)),
+        cluster_id=7,
+        reason="bulk assignment test",
+    )
+
+    assert result.total_count == store_count
+    assert result.success_count == store_count
+    assert result.changed_count == store_count
+    assert session.scalars.await_count == 1
+    service.get_cluster_or_raise.assert_awaited_once_with(7)
+    assert service.assign_store.await_count == store_count
+    for call, store in zip(
+        service.assign_store.await_args_list,
+        stores,
+        strict=True,
+    ):
+        assert call.kwargs["_preloaded_store"] is store
+        assert call.kwargs["_cluster_prevalidated"] is True
