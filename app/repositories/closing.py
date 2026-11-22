@@ -1815,6 +1815,92 @@ class ClosingRepository(
             ),
         }
 
+    async def get_daily_statistics_by_bush(
+        self,
+        *,
+        business_date: date,
+    ) -> dict[int, dict[str, int | float | Decimal]]:
+        """Повертає статистику закриття всіх кущів одним SQL-запитом."""
+
+        count_columns = [
+            func.count(ClosingReport.id)
+            .filter(ClosingReport.status == status)
+            .label(f"count_{status.name.lower()}")
+            for status in ClosingStatus
+        ]
+        submitted_filter = (
+            ClosingReport.status.in_(self.SUBMITTED_STATUSES)
+            & ClosingReport.cash_amount.is_not(None)
+        )
+        statement = (
+            select(
+                Store.bush_id.label("bush_id"),
+                *count_columns,
+                func.coalesce(
+                    func.sum(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("total_cash"),
+                func.coalesce(
+                    func.avg(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("average_cash"),
+                func.coalesce(
+                    func.max(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("maximum_cash"),
+                func.coalesce(
+                    func.min(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("minimum_cash"),
+            )
+            .join(Store, Store.id == ClosingReport.store_id)
+            .where(
+                ClosingReport.business_date == business_date,
+                Store.bush_id.is_not(None),
+            )
+            .group_by(Store.bush_id)
+        )
+        result = await self.session.execute(statement)
+        statistics: dict[int, dict[str, int | float | Decimal]] = {}
+
+        for row in result.mappings().all():
+            counts = {
+                status: int(row[f"count_{status.name.lower()}"] or 0)
+                for status in ClosingStatus
+            }
+            expected_count = sum(
+                count
+                for status, count in counts.items()
+                if status not in self.EXCLUDED_STATUSES
+            )
+            submitted_count = sum(
+                counts[status]
+                for status in self.SUBMITTED_STATUSES
+            )
+            late_count = counts[ClosingStatus.SUBMITTED_LATE]
+            missed_count = counts[ClosingStatus.MISSED_DEADLINE]
+            statistics[int(row["bush_id"])] = {
+                "expected_count": expected_count,
+                "submitted_count": submitted_count,
+                "submitted_on_time_count": counts[ClosingStatus.SUBMITTED_ON_TIME],
+                "submitted_late_count": late_count,
+                "manually_confirmed_count": counts[ClosingStatus.MANUALLY_CONFIRMED],
+                "waiting_count": counts[ClosingStatus.WAITING],
+                "missed_count": missed_count,
+                "problem_count": late_count + missed_count,
+                "total_cash": Decimal(str(row["total_cash"] or 0)).quantize(Decimal("0.01")),
+                "average_cash": Decimal(str(row["average_cash"] or 0)).quantize(Decimal("0.01")),
+                "maximum_cash": Decimal(str(row["maximum_cash"] or 0)).quantize(Decimal("0.01")),
+                "minimum_cash": Decimal(str(row["minimum_cash"] or 0)).quantize(Decimal("0.01")),
+                "completion_percent": (
+                    round(submitted_count / expected_count * 100, 2)
+                    if expected_count > 0
+                    else 0.0
+                ),
+            }
+
+        return statistics
+
     # ==========================================
     # ДОПОМІЖНІ МЕТОДИ
     # ==========================================
