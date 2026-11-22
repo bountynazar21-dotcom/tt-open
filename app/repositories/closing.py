@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import (
     func,
     select,
+    tuple_,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -332,65 +333,66 @@ class ClosingRepository(
             control_deadline=plan.control_deadline,
         )
 
-    async def create_missing_records(
+async def create_missing_records(
         self,
         plans: Iterable[ClosingPlan],
     ) -> list[ClosingReport]:
-        """Create missing closing rows with one read and one batch insert per date."""
-        plans_by_date: dict[date, dict[int, ClosingPlan]] = {}
+        """Create missing closing rows with one read across all dates/stores."""
+        plans_by_key: dict[tuple[date, int], ClosingPlan] = {}
         for plan in plans:
-            plans_by_date.setdefault(
-                plan.business_date,
-                {},
-            )[plan.store_id] = plan
+            plans_by_key[(plan.business_date, plan.store_id)] = plan
 
-        created_reports: list[ClosingReport] = []
-        for business_date, plans_by_store in plans_by_date.items():
-            store_ids = set(plans_by_store)
-            existing_result = await self.session.scalars(
-                select(ClosingReport.store_id).where(
-                    ClosingReport.business_date == business_date,
-                    ClosingReport.store_id.in_(store_ids),
-                )
+        if not plans_by_key:
+            return []
+
+        existing_result = await self.session.execute(
+            select(
+                ClosingReport.business_date,
+                ClosingReport.store_id,
+            ).where(
+                tuple_(
+                    ClosingReport.business_date,
+                    ClosingReport.store_id,
+                ).in_(list(plans_by_key))
             )
-            existing_ids = {
-                int(store_id)
-                for store_id in existing_result.all()
-            }
+        )
+        existing_keys = {
+            (business_date, int(store_id))
+            for business_date, store_id in existing_result.all()
+        }
 
-            missing_plans = [
-                plan
-                for store_id, plan in plans_by_store.items()
-                if store_id not in existing_ids
-            ]
-            if not missing_plans:
-                continue
+        missing_plans = [
+            plan
+            for key, plan in plans_by_key.items()
+            if key not in existing_keys
+        ]
+        if not missing_plans:
+            return []
 
-            new_records = [
-                ClosingReport.create_waiting(
-                    store_id=plan.store_id,
-                    business_date=plan.business_date,
-                    scheduled_close_time=plan.scheduled_close_time,
-                    control_deadline=plan.control_deadline,
-                )
-                for plan in missing_plans
-            ]
+        new_records = [
+            ClosingReport.create_waiting(
+                store_id=plan.store_id,
+                business_date=plan.business_date,
+                scheduled_close_time=plan.scheduled_close_time,
+                control_deadline=plan.control_deadline,
+            )
+            for plan in missing_plans
+        ]
 
-            try:
-                async with self.session.begin_nested():
-                    self.session.add_all(new_records)
-                    await self.session.flush()
-                created_reports.extend(new_records)
-            except IntegrityError:
-                # A concurrent scheduler may win the unique constraint.
-                # Retry only this rare conflict path with the safe
-                # per-record get-or-create implementation.
-                for plan in missing_plans:
-                    report, was_created = await self.create_from_plan(plan)
-                    if was_created:
-                        created_reports.append(report)
-
-        return created_reports
+        try:
+            async with self.session.begin_nested():
+                self.session.add_all(new_records)
+                await self.session.flush()
+            return new_records
+        except IntegrityError:
+            # A concurrent scheduler may win the unique constraint.
+            # Retry only the rare race path with the safe get-or-create operation.
+            created_reports: list[ClosingReport] = []
+            for plan in missing_plans:
+                report, was_created = await self.create_from_plan(plan)
+                if was_created:
+                    created_reports.append(report)
+            return created_reports
 
     # ==========================================
     # ФОТО ЧЕКА
