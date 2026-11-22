@@ -823,6 +823,7 @@ class OpeningService:
             create_notifications
             and notifications_enabled
         ):
+            notification_items: list[dict[str, Any]] = []
             for checkin in missed_checkins:
                 store = missed_stores_by_id.get(checkin.store_id)
                 if store is None:
@@ -830,24 +831,28 @@ class OpeningService:
                         checkin.store_id
                     )
 
-                queued, created_count = (
-                    await self.queue_missed_notifications(
+                notification_items.extend(
+                    self.build_missed_notification_items(
                         store=store,
                         checkin=checkin,
+                        recipients=recipients_by_store.get(store.id),
                         queued_at=current_time,
                         timezone_name=resolved_timezone,
-                        recipients=recipients_by_store.get(store.id),
                     )
                 )
 
-                notifications.extend(queued)
-                created_notifications += (
-                    created_count
+            if notification_items:
+                (
+                    notifications,
+                    created_notifications,
+                ) = (
+                    await self.repositories.notifications
+                    .get_or_create_many_from_parts(
+                        notification_items
+                    )
                 )
-
-                existing_notifications += (
-                    len(queued)
-                    - created_count
+                existing_notifications = (
+                    len(notifications) - created_notifications
                 )
 
         for checkin in missed_checkins:
@@ -914,6 +919,58 @@ class OpeningService:
     # СПОВІЩЕННЯ ПРО ПРОПУЩЕНИЙ ДЕДЛАЙН
     # ==========================================
 
+    def build_missed_notification_items(
+        self,
+        *,
+        store: Store,
+        checkin: OpeningCheckin,
+        recipients: list[User] | None,
+        queued_at: datetime,
+        timezone_name: str,
+    ) -> list[dict[str, Any]]:
+        """Build deduplicated notification payloads without database I/O."""
+        if not recipients:
+            return []
+
+        notification_type = self.resolve_notification_type(
+            "opening_missed",
+            "opening_deadline_missed",
+            "opening_alert",
+            "store_not_opened",
+        )
+        message_text = self.build_missed_notification_text(
+            store=store,
+            checkin=checkin,
+            timezone_name=timezone_name,
+        )
+
+        items: list[dict[str, Any]] = []
+        for recipient in recipients:
+            if recipient.telegram_id is None:
+                continue
+            items.append({
+                "notification_type": notification_type,
+                "business_date": checkin.business_date,
+                "recipient_user_id": recipient.id,
+                "store_id": store.id,
+                "bush_id": store.bush_id,
+                "chat_id": recipient.telegram_id,
+                "suffix": "opening-deadline-missed",
+                "scheduled_for": queued_at,
+                "message_text": message_text,
+                "payload_json": {
+                    "parse_mode": "HTML",
+                    "checkin_id": checkin.id,
+                    "store_id": store.id,
+                    "store_code": store.code,
+                    "business_date": checkin.business_date.isoformat(),
+                    "scheduled_open_time": checkin.scheduled_open_time.strftime("%H:%M"),
+                    "control_deadline": checkin.control_deadline.strftime("%H:%M"),
+                    "recipient_role": recipient.role.value,
+                },
+            })
+        return items
+
     async def queue_missed_notifications(
         self,
         *,
@@ -923,110 +980,23 @@ class OpeningService:
         timezone_name: str,
         recipients: list[User] | None = None,
     ) -> tuple[list[NotificationLog], int]:
-        """
-        Створює повідомлення для:
-
-        - працівників ТТ;
-        - адміністратора куща;
-        - левів куща;
-        - директора;
-        - ROOT_ADMIN.
-        """
-
+        """Create missed-opening notifications for one store."""
         if recipients is None:
             recipients = await self.get_alert_recipients(store)
 
-        if not recipients:
+        items = self.build_missed_notification_items(
+            store=store,
+            checkin=checkin,
+            recipients=recipients,
+            queued_at=queued_at,
+            timezone_name=timezone_name,
+        )
+        if not items:
             return [], 0
 
-        notification_type = (
-            self.resolve_notification_type(
-                "opening_missed",
-                "opening_deadline_missed",
-                "opening_alert",
-                "store_not_opened",
-            )
+        return await self.repositories.notifications.get_or_create_many_from_parts(
+            items
         )
-
-        message_text = (
-            self.build_missed_notification_text(
-                store=store,
-                checkin=checkin,
-                timezone_name=timezone_name,
-            )
-        )
-
-        notifications: list[
-            NotificationLog
-        ] = []
-
-        created_count = 0
-
-        for recipient in recipients:
-            if recipient.telegram_id is None:
-                continue
-
-            notification, was_created = (
-                await self.repositories.notifications
-                .get_or_create_from_parts(
-                    notification_type=(
-                        notification_type
-                    ),
-                    business_date=(
-                        checkin.business_date
-                    ),
-                    recipient_user_id=(
-                        recipient.id
-                    ),
-                    store_id=store.id,
-                    bush_id=store.bush_id,
-                    chat_id=(
-                        recipient.telegram_id
-                    ),
-                    suffix=(
-                        "opening-deadline-missed"
-                    ),
-                    scheduled_for=queued_at,
-                    message_text=message_text,
-                    payload_json={
-                        "parse_mode": "HTML",
-                        "checkin_id": (
-                            checkin.id
-                        ),
-                        "store_id": store.id,
-                        "store_code": (
-                            store.code
-                        ),
-                        "business_date": (
-                            checkin
-                            .business_date
-                            .isoformat()
-                        ),
-                        "scheduled_open_time": (
-                            checkin
-                            .scheduled_open_time
-                            .strftime("%H:%M")
-                        ),
-                        "control_deadline": (
-                            checkin
-                            .control_deadline
-                            .strftime("%H:%M")
-                        ),
-                        "recipient_role": (
-                            recipient.role.value
-                        ),
-                    },
-                )
-            )
-
-            notifications.append(
-                notification
-            )
-
-            if was_created:
-                created_count += 1
-
-        return notifications, created_count
 
     async def get_alert_recipients_for_stores(
         self,
