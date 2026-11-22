@@ -1677,6 +1677,29 @@ class ImportService:
             if row.is_actionable
         ]
 
+        has_imported_schedule = any(
+            any(
+                value is not None
+                for value in (
+                    row.weekday_opening,
+                    row.weekday_closing,
+                    row.saturday_opening,
+                    row.saturday_closing,
+                    row.sunday_opening,
+                    row.sunday_closing,
+                )
+            )
+            for row in actionable_rows
+        )
+        schedule_deadline_minutes = None
+        if has_imported_schedule:
+            schedule_deadline_minutes = (
+                await self.repositories.settings
+                .get_opening_deadline_minutes(),
+                await self.repositories.settings
+                .get_closing_deadline_minutes(),
+            )
+
         for row in actionable_rows:
             try:
                 async with self.session.begin_nested():
@@ -1689,6 +1712,9 @@ class ImportService:
                             ),
                             changed_at=(
                                 imported_at
+                            ),
+                            schedule_deadline_minutes=(
+                                schedule_deadline_minutes
                             ),
                         )
                     )
@@ -1798,6 +1824,7 @@ class ImportService:
         row: StoreImportRow,
         reason: str,
         changed_at: datetime,
+        schedule_deadline_minutes: tuple[int, int] | None = None,
     ) -> ImportApplyItemResult:
         """
         Записує один рядок.
@@ -1867,6 +1894,7 @@ class ImportService:
                 store_id=create_result.store.id,
                 row=row,
                 reason=reason,
+                schedule_deadline_minutes=schedule_deadline_minutes,
             )
 
             return ImportApplyItemResult(
@@ -2013,6 +2041,7 @@ class ImportService:
             store_id=store.id,
             row=row,
             reason=reason,
+            schedule_deadline_minutes=schedule_deadline_minutes,
         )
 
         return ImportApplyItemResult(
@@ -3279,6 +3308,7 @@ class ImportService:
         store_id: int,
         row: StoreImportRow,
         reason: str,
+        schedule_deadline_minutes: tuple[int, int] | None = None,
     ) -> None:
         groups = (
             (
@@ -3307,15 +3337,20 @@ class ImportService:
         if not has_schedule:
             return
 
-        opening_deadline_minutes = (
-            await self.repositories.settings
-            .get_opening_deadline_minutes()
-        )
-
-        closing_deadline_minutes = (
-            await self.repositories.settings
-            .get_closing_deadline_minutes()
-        )
+        if schedule_deadline_minutes is None:
+            opening_deadline_minutes = (
+                await self.repositories.settings
+                .get_opening_deadline_minutes()
+            )
+            closing_deadline_minutes = (
+                await self.repositories.settings
+                .get_closing_deadline_minutes()
+            )
+        else:
+            (
+                opening_deadline_minutes,
+                closing_deadline_minutes,
+            ) = schedule_deadline_minutes
 
         schedule_items: list[dict[str, Any]] = []
 
