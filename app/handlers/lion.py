@@ -998,10 +998,12 @@ async def _prime_lion_status_cache(
 
     from app.database.models.closing_report import ClosingReport
     from app.database.models.opening_checkin import OpeningCheckin
-    from app.utils.datetime import today_local
+    from app.utils.datetime import closing_business_date, now_local, today_local
 
     today = today_local()
-    if data.get("_lion_status_cache_date") == today:
+    closing_date = closing_business_date(now_local())
+    cache_key = (today, closing_date)
+    if data.get("_lion_status_cache_date") == cache_key:
         return
 
     session = data.get("session") or data.get("db_session")
@@ -1013,7 +1015,7 @@ async def _prime_lion_status_cache(
             select(OpeningCheckin).where(OpeningCheckin.business_date == today)
         )
         closing_result = await session.scalars(
-            select(ClosingReport).where(ClosingReport.business_date == today)
+            select(ClosingReport).where(ClosingReport.business_date == closing_date)
         )
         opening_rows = list(opening_result.unique().all())
         closing_rows = list(closing_result.unique().all())
@@ -1031,10 +1033,10 @@ async def _prime_lion_status_cache(
         for row in closing_rows
         if getattr(row, "store_id", None) is not None
     }
-    data["_lion_status_cache_date"] = today
+    data["_lion_status_cache_date"] = cache_key
     logger.info(
-        "Lion bulk status cache ready | date=%s openings=%s closings=%s",
-        today, len(opening_rows), len(closing_rows),
+        "Lion bulk status cache ready | opening_date=%s closing_date=%s openings=%s closings=%s",
+        today, closing_date, len(opening_rows), len(closing_rows),
     )
 
 async def build_lion_store_item(
