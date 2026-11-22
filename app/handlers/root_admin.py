@@ -82,7 +82,7 @@ from app.keyboards.director import (
     director_users_keyboard,
 )
 
-from app.utils.datetime import today_local
+from app.utils.datetime import closing_business_date, now_local, today_local
 
 logger = logging.getLogger(
     __name__
@@ -922,12 +922,14 @@ async def _prime_director_status_cache(
     from app.utils.datetime import today_local
 
     today = today_local()
+    closing_date = closing_business_date(now_local())
+    cache_key = (today, closing_date)
 
     if (
         data.get(
             "_director_status_cache_date"
         )
-        == today
+        == cache_key
     ):
         return
 
@@ -957,7 +959,7 @@ async def _prime_director_status_cache(
                 ClosingReport
             ).where(
                 ClosingReport.business_date
-                == today
+                == closing_date
             )
         )
 
@@ -1003,12 +1005,13 @@ async def _prime_director_status_cache(
 
     data[
         "_director_status_cache_date"
-    ] = today
+    ] = cache_key
 
     logger.info(
         "Director bulk cache ready | "
-        "date=%s openings=%s closings=%s",
+        "opening_date=%s closing_date=%s openings=%s closings=%s",
         today,
+        closing_date,
         len(opening_rows),
         len(closing_rows),
     )
