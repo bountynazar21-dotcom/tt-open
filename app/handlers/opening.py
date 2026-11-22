@@ -704,7 +704,12 @@ async def build_store_choices(
         tuple[int, str]
     ] = []
 
-    session = data.get("session") or data.get("db_session")
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
     stores_by_id: dict[int, Any] = {}
 
     if session is not None and store_ids:
