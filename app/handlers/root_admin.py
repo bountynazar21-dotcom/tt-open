@@ -1011,23 +1011,17 @@ async def build_director_store_item(
         )
 
     else:
-        if has_bulk_cache:
-            opening = opening_by_store.get(store_id)
-        else:
-            opening = await get_opening_status(
-                store_id=store_id,
-                user=user,
-                data=data,
-            )
+        opening = await get_opening_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
 
-        if has_bulk_cache:
-            closing = closing_by_store.get(store_id)
-        else:
-            closing = await get_closing_status(
-                store_id=store_id,
-                user=user,
-                data=data,
-            )
+        closing = await get_closing_status(
+            store_id=store_id,
+            user=user,
+            data=data,
+        )
 
     opened = opening_exists(
         opening
@@ -2918,11 +2912,14 @@ async def director_missing_closing_callback(
             store
         )
 
-        opening = await get_opening_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            opening = opening_by_store.get(store_id)
+        else:
+            opening = await get_opening_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
         # Магазин не відкривався —
         # він не належить до списку
@@ -2932,11 +2929,14 @@ async def director_missing_closing_callback(
         ):
             continue
 
-        closing = await get_closing_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            closing = closing_by_store.get(store_id)
+        else:
+            closing = await get_closing_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
         if result_is_completed(
             closing
