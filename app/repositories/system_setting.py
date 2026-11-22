@@ -388,6 +388,29 @@ class SystemSettingRepository(
     # ПОШУК ЗА КЛЮЧЕМ
     # ==========================================
 
+    async def get_by_keys_for_update(
+        self,
+        keys: Sequence[str],
+    ) -> dict[str, SystemSetting]:
+        """Loads and locks a set of settings with one SQL query."""
+        normalized_keys = {
+            self.normalize_key(key)
+            for key in keys
+        }
+        if not normalized_keys:
+            return {}
+
+        result = await self.session.scalars(
+            select(SystemSetting)
+            .where(SystemSetting.key.in_(normalized_keys))
+            .order_by(SystemSetting.key.asc())
+            .with_for_update(of=SystemSetting)
+        )
+        return {
+            setting.key: setting
+            for setting in result.unique().all()
+        }
+
     async def get_by_key(
         self,
         key: str,
@@ -713,6 +736,8 @@ class SystemSettingRepository(
         is_secret: bool | None = None,
         update_description: bool = False,
         update_category: bool = False,
+        _preloaded_setting: SystemSetting | None = None,
+        _setting_preloaded: bool = False,
     ) -> SettingUpdateResult:
         """
         Створює або оновлює налаштування.
@@ -733,9 +758,13 @@ class SystemSettingRepository(
             value
         )
 
-        setting = await self.get_by_key(
-            normalized_key,
-            for_update=True,
+        setting = (
+            _preloaded_setting
+            if _setting_preloaded
+            else await self.get_by_key(
+                normalized_key,
+                for_update=True,
+            )
         )
 
         if setting is not None:
