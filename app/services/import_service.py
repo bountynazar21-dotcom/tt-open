@@ -3317,6 +3317,8 @@ class ImportService:
             .get_closing_deadline_minutes()
         )
 
+        schedule_items: list[dict[str, Any]] = []
+
         for (
             weekdays,
             opening,
@@ -3352,21 +3354,22 @@ class ImportService:
             )
 
             for weekday in weekdays:
-                await self.schedules.set_store_weekday(
-                    actor=actor,
-                    store_id=store_id,
-                    weekday=weekday,
-                    is_working_day=True,
-                    opening_time=opening,
-                    opening_control_deadline=(
-                        opening_deadline
-                    ),
-                    closing_time=closing,
-                    closing_control_deadline=(
-                        closing_deadline
-                    ),
-                    reason=reason,
-                )
+                schedule_items.append({
+                    "weekday": weekday,
+                    "is_working_day": True,
+                    "opening_time": opening,
+                    "opening_control_deadline": opening_deadline,
+                    "closing_time": closing,
+                    "closing_control_deadline": closing_deadline,
+                })
+
+        if schedule_items:
+            await self.schedules.set_store_weekdays(
+                actor=actor,
+                store_id=store_id,
+                items=schedule_items,
+                reason=reason,
+            )
 
     @staticmethod
     def add_minutes_to_time(
