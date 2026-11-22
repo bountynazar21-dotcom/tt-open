@@ -1937,32 +1937,20 @@ class UserService:
             statement
         )
 
+        recent_user_rows = list(result.unique().all())
+        recent_access_by_user, _ = (
+            await self.get_access_internal_many(recent_user_rows)
+        )
+
         recent_users: list[
             UserListItem
-        ] = []
-
-        for user in result.unique().all():
-            try:
-                await self.ensure_can_view_user(
-                    actor=actor,
-                    target=user,
-                )
-
-            except AccessDeniedError:
-                continue
-
-            access_view = (
-                await self.get_access_internal(
-                    user
-                )
+        ] = [
+            self.build_list_item(
+                user,
+                access_view=recent_access_by_user[user.id],
             )
-
-            recent_users.append(
-                self.build_list_item(
-                    user,
-                    access_view=access_view,
-                )
-            )
+            for user in recent_user_rows
+        ]
 
         return AdminUsersDashboard(
             statistics=statistics,
