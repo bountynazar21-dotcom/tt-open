@@ -989,6 +989,193 @@ class ScheduleRepository:
     # ФАКТИЧНИЙ ГРАФІК
     # ==========================================
 
+    async def get_effective_schedules_for_store_range(
+        self,
+        *,
+        store: Store,
+        date_from: date,
+        date_to: date,
+    ) -> list[EffectiveSchedule]:
+        """Resolve a store's effective schedule for a date range in batches."""
+        if date_to < date_from:
+            return []
+
+        dates: list[date] = []
+        current_date = date_from
+        while current_date <= date_to:
+            dates.append(current_date)
+            current_date = date.fromordinal(current_date.toordinal() + 1)
+
+        if (
+            not store.is_active
+            or store.status == StoreStatus.INACTIVE
+        ):
+            return [
+                EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=day,
+                    is_working_day=False,
+                    source="store_inactive",
+                    reason="Торгова точка деактивована",
+                )
+                for day in dates
+            ]
+
+        if store.status == StoreStatus.TEMPORARILY_CLOSED:
+            return [
+                EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=day,
+                    is_working_day=False,
+                    source="store_temporarily_closed",
+                    reason="Торгова точка тимчасово закрита",
+                )
+                for day in dates
+            ]
+
+        store_exception_result = await self.session.scalars(
+            select(ScheduleException).where(
+                ScheduleException.store_id == store.id,
+                ScheduleException.exception_date >= date_from,
+                ScheduleException.exception_date <= date_to,
+            )
+        )
+        store_exceptions = {
+            item.exception_date: item
+            for item in store_exception_result.unique().all()
+        }
+
+        bush_exceptions = {}
+        if store.bush_id is not None:
+            bush_result = await self.session.scalars(
+                select(ScheduleException).where(
+                    ScheduleException.bush_id == store.bush_id,
+                    ScheduleException.store_id.is_(None),
+                    ScheduleException.exception_date >= date_from,
+                    ScheduleException.exception_date <= date_to,
+                )
+            )
+            bush_exceptions = {
+                item.exception_date: item
+                for item in bush_result.unique().all()
+            }
+
+        network_result = await self.session.scalars(
+            select(ScheduleException).where(
+                ScheduleException.store_id.is_(None),
+                ScheduleException.bush_id.is_(None),
+                ScheduleException.exception_date >= date_from,
+                ScheduleException.exception_date <= date_to,
+            )
+        )
+        network_exceptions = {
+            item.exception_date: item
+            for item in network_result.unique().all()
+        }
+
+        weekdays = {day.weekday() for day in dates}
+        weekday_result = await self.session.scalars(
+            select(StoreSchedule).where(
+                StoreSchedule.store_id == store.id,
+                StoreSchedule.weekday.in_(weekdays),
+            )
+        )
+        weekday_schedules = {
+            item.weekday: item
+            for item in weekday_result.unique().all()
+        }
+
+        cluster = None
+        if store.cluster_id is not None:
+            cluster = await self.session.get(Cluster, store.cluster_id)
+
+        schedules: list[EffectiveSchedule] = []
+        for day in dates:
+            exception = store_exceptions.get(day)
+            source = "store_exception"
+
+            if exception is None:
+                exception = bush_exceptions.get(day)
+                source = "bush_exception"
+
+            if exception is None:
+                exception = network_exceptions.get(day)
+                source = "network_exception"
+
+            if exception is not None:
+                schedules.append(
+                    self.schedule_from_exception(
+                        store=store,
+                        business_date=day,
+                        exception=exception,
+                        source=source,
+                    )
+                )
+                continue
+
+            weekday_schedule = weekday_schedules.get(day.weekday())
+            if weekday_schedule is not None:
+                schedules.append(
+                    EffectiveSchedule(
+                        store_id=store.id,
+                        business_date=day,
+                        is_working_day=weekday_schedule.is_working_day,
+                        source="store_weekly_schedule",
+                        opening_time=(
+                            weekday_schedule.opening_time
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        opening_control_deadline=(
+                            weekday_schedule.opening_control_deadline
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        closing_time=(
+                            weekday_schedule.closing_time
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        closing_control_deadline=(
+                            weekday_schedule.closing_control_deadline
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        reason=(
+                            None
+                            if weekday_schedule.is_working_day
+                            else "Постійний вихідний день"
+                        ),
+                    )
+                )
+                continue
+
+            if cluster is not None and cluster.is_active:
+                schedules.append(
+                    EffectiveSchedule(
+                        store_id=store.id,
+                        business_date=day,
+                        is_working_day=True,
+                        source="cluster_default",
+                        opening_time=cluster.opening_time,
+                        opening_control_deadline=cluster.opening_control_deadline,
+                        closing_time=cluster.default_closing_time,
+                        closing_control_deadline=cluster.default_closing_control_deadline,
+                    )
+                )
+                continue
+
+            schedules.append(
+                EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=day,
+                    is_working_day=False,
+                    source="schedule_missing",
+                    reason=(
+                        "Для торгової точки не налаштовано "
+                        "графік або часовий кластер"
+                    ),
+                )
+            )
+
+        return schedules
+
     async def get_effective_schedule(
         self,
         *,
