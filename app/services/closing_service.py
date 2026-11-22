@@ -1775,6 +1775,8 @@ class ClosingService:
         bush_group_settings = await self.groups.get_int_settings(
             bush_chat_keys | bush_topic_keys
         )
+        bush_summary_items: list[dict[str, Any]] = []
+        bush_summary_context: list[tuple[int, str]] = []
 
         for bush_id in sorted(target_bush_ids):
             bush = None
@@ -1844,29 +1846,17 @@ class ClosingService:
                     )
                 )
 
-                decision = (
-                    await self.repositories
-                    .daily_summaries
-                    .prepare_update(
-                        summary_type=(
-                            bush_summary_type
-                        ),
-                        business_date=(
-                            business_date
-                        ),
-                        chat_id=(
-                            bush_destination.chat_id
-                        ),
-                        bush_id=bush.id,
-                        topic_id=topic_id,
-                        message_text=message_text,
-                        snapshot_json=snapshot,
-                    )
-                )
-
-                decisions.append(
-                    decision
-                )
+                bush_summary_items.append({
+                    "chat_id": bush_destination.chat_id,
+                    "bush_id": bush.id,
+                    "topic_id": topic_id,
+                    "message_text": message_text,
+                    "snapshot_json": snapshot,
+                })
+                bush_summary_context.append((
+                    bush.id,
+                    str(getattr(bush, "name", f"Кущ #{bush.id}")),
+                ))
 
             except Exception as error:
                 if bush is not None:
@@ -1889,6 +1879,45 @@ class ClosingService:
                         f"{error}"
                     )[:300]
                 )
+
+        if bush_summary_items:
+            try:
+                decisions.extend(
+                    await self.repositories.daily_summaries
+                    .prepare_updates_many(
+                        summary_type=bush_summary_type,
+                        business_date=business_date,
+                        items=bush_summary_items,
+                    )
+                )
+            except Exception as batch_error:
+                # Keep the old per-bush failure isolation if the batch write fails.
+                for item, (bush_id, bush_name) in zip(
+                    bush_summary_items,
+                    bush_summary_context,
+                    strict=True,
+                ):
+                    try:
+                        decisions.append(
+                            await self.repositories.daily_summaries
+                            .prepare_update(
+                                summary_type=bush_summary_type,
+                                business_date=business_date,
+                                chat_id=item["chat_id"],
+                                bush_id=item["bush_id"],
+                                topic_id=item["topic_id"],
+                                message_text=item["message_text"],
+                                snapshot_json=item["snapshot_json"],
+                            )
+                        )
+                    except Exception as error:
+                        preparation_errors.append(
+                            (
+                                f"{bush_name}: "
+                                f"{type(error).__name__}: "
+                                f"{error}"
+                            )[:300]
+                        )
 
         if not include_network:
             return decisions
