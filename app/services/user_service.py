@@ -886,7 +886,11 @@ class UserService:
                 store_bush_ids_by_user[user_id] = set()
                 continue
 
-            stores = store_rows_by_user.get(user_id, [])
+            stores_by_id = {
+                store.id: store
+                for store in store_rows_by_user.get(user_id, [])
+            }
+            stores = list(stores_by_id.values())
             bushes_by_id = {
                 bush.id: bush
                 for bush in bush_rows_by_user.get(user_id, [])
