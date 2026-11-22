@@ -1400,16 +1400,9 @@ class ClosingService:
             missed_reports
             and update_summaries
         ):
-            stores = await self.load_stores(
-                {
-                    report.store_id
-                    for report in missed_reports
-                }
-            )
-
             bush_ids = {
                 store.bush_id
-                for store in stores
+                for store in missed_stores
                 if store.bush_id is not None
             }
 
