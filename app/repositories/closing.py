@@ -333,7 +333,7 @@ class ClosingRepository(
             control_deadline=plan.control_deadline,
         )
 
-async def create_missing_records(
+    async def create_missing_records(
         self,
         plans: Iterable[ClosingPlan],
     ) -> list[ClosingReport]:
