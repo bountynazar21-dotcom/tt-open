@@ -414,12 +414,7 @@ class ClusterService:
             result.unique().all()
         )
 
-        return [
-            await self.build_cluster_view(
-                cluster
-            )
-            for cluster in clusters
-        ]
+        return await self.build_cluster_views(clusters)
 
     # ==========================================
     # СТВОРЕННЯ КЛАСТЕРА
@@ -1895,6 +1890,48 @@ class ClusterService:
     # VIEW
     # ==========================================
 
+    async def build_cluster_views(
+        self,
+        clusters: list[Cluster],
+    ) -> list[ClusterView]:
+        """Build cluster views with one batched store query."""
+        if not clusters:
+            return []
+
+        cluster_ids = {cluster.id for cluster in clusters}
+        store_result = await self.session.scalars(
+            select(Store).where(Store.cluster_id.in_(cluster_ids))
+        )
+        stores_by_cluster: dict[int, list[Store]] = {}
+        for store in store_result.unique().all():
+            if store.cluster_id is not None:
+                stores_by_cluster.setdefault(int(store.cluster_id), []).append(store)
+
+        views: list[ClusterView] = []
+        for cluster in clusters:
+            stores = stores_by_cluster.get(cluster.id, [])
+            active_count = sum(
+                bool(getattr(store, "is_active", True))
+                for store in stores
+            )
+            views.append(
+                ClusterView(
+                    id=cluster.id,
+                    name=self.cluster_name(cluster),
+                    code=self.get_text_attribute(cluster, "code", "slug"),
+                    opening_time=self.cluster_opening_time(cluster),
+                    control_deadline_minutes=self.cluster_deadline_minutes(cluster),
+                    is_active=bool(getattr(cluster, "is_active", True)),
+                    active_store_count=active_count,
+                    total_store_count=len(stores),
+                    created_at=getattr(cluster, "created_at", None),
+                    updated_at=getattr(cluster, "updated_at", None),
+                    raw_cluster=cluster,
+                )
+            )
+
+        return views
+
     async def build_cluster_view(
         self,
         cluster: Cluster,
@@ -1903,90 +1940,8 @@ class ClusterService:
         Формує ClusterView.
         """
 
-        store_statement = (
-            select(Store)
-            .where(
-                Store.cluster_id
-                == cluster.id
-            )
-        )
-
-        store_result = (
-            await self.session.scalars(
-                store_statement
-            )
-        )
-
-        stores = list(
-            store_result.unique().all()
-        )
-
-        active_count = sum(
-            bool(
-                getattr(
-                    store,
-                    "is_active",
-                    True,
-                )
-            )
-            for store in stores
-        )
-
-        return ClusterView(
-            id=cluster.id,
-
-            name=self.cluster_name(
-                cluster
-            ),
-
-            code=self.get_text_attribute(
-                cluster,
-                "code",
-                "slug",
-            ),
-
-            opening_time=(
-                self.cluster_opening_time(
-                    cluster
-                )
-            ),
-
-            control_deadline_minutes=(
-                self.cluster_deadline_minutes(
-                    cluster
-                )
-            ),
-
-            is_active=bool(
-                getattr(
-                    cluster,
-                    "is_active",
-                    True,
-                )
-            ),
-
-            active_store_count=(
-                active_count
-            ),
-
-            total_store_count=len(
-                stores
-            ),
-
-            created_at=getattr(
-                cluster,
-                "created_at",
-                None,
-            ),
-
-            updated_at=getattr(
-                cluster,
-                "updated_at",
-                None,
-            ),
-
-            raw_cluster=cluster,
-        )
+        views = await self.build_cluster_views([cluster])
+        return views[0]
 
     # ==========================================
     # SNAPSHOT
