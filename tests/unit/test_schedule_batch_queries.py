@@ -23,6 +23,7 @@ from app.services.cluster_service import ClusterService
 from app.services.store_service import StoreService
 from app.services.settings_service import SettingsService
 from app.services.opening_service import OpeningService
+from app.services.import_service import ImportService
 
 
 class FakeScalarResult:
@@ -970,3 +971,45 @@ async def test_weekly_schedule_upsert_batches_all_seven_days() -> None:
     session.add_all.assert_called_once()
     assert len(session.add_all.call_args.args[0]) == 7
     session.flush.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+async def test_imported_schedule_reuses_preloaded_deadline_settings() -> None:
+    set_weekdays = AsyncMock()
+    settings = SimpleNamespace(
+        get_opening_deadline_minutes=AsyncMock(return_value=10),
+        get_closing_deadline_minutes=AsyncMock(return_value=15),
+    )
+    service = object.__new__(ImportService)
+    service.repositories = SimpleNamespace(settings=settings)
+    service.schedules = SimpleNamespace(
+        set_store_weekdays=set_weekdays
+    )
+    row = SimpleNamespace(
+        weekday_opening=time(9, 0),
+        weekday_closing=time(21, 0),
+        saturday_opening=time(10, 0),
+        saturday_closing=time(20, 0),
+        sunday_opening=time(11, 0),
+        sunday_closing=time(19, 0),
+    )
+
+    await service.apply_imported_schedule(
+        actor=SimpleNamespace(id=1),
+        store_id=42,
+        row=row,
+        reason="import test",
+        schedule_deadline_minutes=(10, 15),
+    )
+
+    settings.get_opening_deadline_minutes.assert_not_awaited()
+    settings.get_closing_deadline_minutes.assert_not_awaited()
+    set_weekdays.assert_awaited_once()
+    payload = set_weekdays.await_args.kwargs
+    assert payload["store_id"] == 42
+    assert [item["weekday"] for item in payload["items"]] == list(range(7))
+    assert payload["items"][0]["opening_control_deadline"] == time(9, 10)
+    assert payload["items"][0]["closing_control_deadline"] == time(21, 15)
+    assert payload["items"][5]["opening_control_deadline"] == time(10, 10)
+    assert payload["items"][6]["closing_control_deadline"] == time(19, 15)
