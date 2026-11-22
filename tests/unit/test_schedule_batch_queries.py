@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -1106,7 +1106,7 @@ async def test_opening_missing_records_check_all_dates_in_one_query(
     store_count: int,
 ) -> None:
     dates = [
-        date(2026, 11, 23) + __import__("datetime").timedelta(days=offset)
+        date(2026, 11, 23) + timedelta(days=offset)
         for offset in range(7)
     ]
     plans = [
