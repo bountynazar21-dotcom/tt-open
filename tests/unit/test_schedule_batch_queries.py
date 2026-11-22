@@ -1035,3 +1035,57 @@ async def test_director_bush_cache_negatively_caches_missing_ids(
 
     assert result == "Кущ #777"
     load_bush.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_bindings_keyboard_target_maps_load_each_scope_in_one_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.handlers import bindings as bindings_handler
+
+    stores = [
+        SimpleNamespace(id=10),
+        SimpleNamespace(id=11),
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(stores))
+    )
+    bushes = [
+        SimpleNamespace(id=3, name="Bush 3")
+    ]
+    query_bushes = AsyncMock(return_value=bushes)
+    monkeypatch.setattr(
+        bindings_handler,
+        "query_network_bushes",
+        query_bushes,
+    )
+    bindings = [
+        SimpleNamespace(
+            scope="store",
+            store_id=10,
+            is_active=True,
+        ),
+        SimpleNamespace(
+            scope="store",
+            store_id=11,
+            is_active=True,
+        ),
+        SimpleNamespace(
+            scope="bush",
+            bush_id=3,
+            is_active=True,
+        ),
+    ]
+
+    store_map, bush_map = (
+        await bindings_handler.load_binding_target_maps(
+            bindings=bindings,
+            data={"session": session},
+        )
+    )
+
+    assert set(store_map) == {10, 11}
+    assert set(bush_map) == {3}
+    session.scalars.assert_awaited_once()
+    query_bushes.assert_awaited_once()
