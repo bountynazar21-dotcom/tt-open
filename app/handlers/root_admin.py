@@ -876,15 +876,12 @@ async def store_bush_name(
         return None
 
     if data.get("_director_bush_cache_ready"):
+        # A successful bulk preload also caches missing IDs as absent.
+        # Do not fall back to one SELECT per store for an unknown bush ID.
         bush = data.get(
             "_director_bush_by_id",
             {},
         ).get(bush_id)
-        if bush is None:
-            bush = await load_bush(
-                bush_id=bush_id,
-                data=data,
-            )
     else:
         bush = await load_bush(
             bush_id=bush_id,
