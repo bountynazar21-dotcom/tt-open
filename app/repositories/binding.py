@@ -47,6 +47,41 @@ class BindingRepository:
     # ПРИВ’ЯЗКИ КОРИСТУВАЧІВ ДО ТТ
     # ==========================================
 
+    async def get_store_bindings_for_users(
+        self,
+        *,
+        user_ids: set[int],
+        store_id: int,
+        for_update: bool = False,
+    ) -> dict[int, UserStoreBinding]:
+        """Loads and optionally locks all bindings to one store in one query."""
+        if not user_ids:
+            return {}
+
+        statement = (
+            select(UserStoreBinding)
+            .where(
+                UserStoreBinding.user_id.in_(user_ids),
+                UserStoreBinding.store_id == store_id,
+            )
+            .order_by(
+                UserStoreBinding.id.asc()
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(
+                of=UserStoreBinding
+            )
+
+        result = await self.session.scalars(statement)
+        bindings_by_user: dict[int, UserStoreBinding] = {}
+        for binding in result.unique().all():
+            bindings_by_user.setdefault(
+                int(binding.user_id),
+                binding,
+            )
+        return bindings_by_user
+
     async def get_store_binding(
         self,
         *,
