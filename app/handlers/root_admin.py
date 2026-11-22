@@ -642,11 +642,11 @@ async def query_all_stores(
 
     if direct_ids:
         repositories = data.get("repositories")
-    session = (
-        data.get("session")
-        or data.get("db_session")
-        or getattr(repositories, "session", None)
-    )
+        session = (
+            data.get("session")
+            or data.get("db_session")
+            or getattr(repositories, "session", None)
+        )
         if session is not None:
             from sqlalchemy import select
             from app.database.models.store import Store
