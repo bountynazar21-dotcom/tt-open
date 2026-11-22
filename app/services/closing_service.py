@@ -37,6 +37,7 @@ from app.repositories import (
 from app.services.access import AccessService
 from app.services.group_service import (
     GroupService,
+    TelegramGroupScope,
     TelegramGroupTopic,
 )
 from app.utils.datetime import closing_business_date
@@ -2123,6 +2124,31 @@ class ClosingService:
             result.unique().all()
         )
 
+        statistics_by_bush = (
+            await self.repositories.closings
+            .get_daily_statistics_by_bush(
+                business_date=business_date,
+            )
+        )
+        setting_keys: set[str] = set()
+        for bush in bushes:
+            setting_keys.add(
+                self.groups.chat_id_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                )
+            )
+            setting_keys.add(
+                self.groups.thread_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                    topic=TelegramGroupTopic.SUMMARIES,
+                )
+            )
+        group_settings = await self.groups.get_int_settings(
+            setting_keys
+        )
+
         lines = [
             (
                 "🌿 <b>Підрахунок по кущах "
@@ -2144,15 +2170,14 @@ class ClosingService:
             )
 
             try:
-                stats = (
-                    await self.repositories
-                    .closings
-                    .get_daily_statistics(
-                        business_date=(
-                            business_date
-                        ),
-                        bush_id=bush.id,
-                    )
+                stats = statistics_by_bush.get(
+                    bush.id,
+                    {
+                        "expected_count": 0,
+                        "submitted_count": 0,
+                        "waiting_count": 0,
+                        "missed_count": 0,
+                    },
                 )
 
                 expected = int(
@@ -2186,30 +2211,23 @@ class ClosingService:
 
                 issues: list[str] = []
 
-                bush_chat_id = (
-                    await self.groups.get_int_setting(
-                        self.groups.chat_id_key(
-                            scope=TelegramGroupScope.BUSH,
-                            bush_id=bush.id,
-                        )
-                    )
+                bush_chat_id_key = self.groups.chat_id_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
                 )
-
-                bush_summary_thread_id = None
-
-                if bush_chat_id is not None:
-                    bush_summary_thread_id = (
-                        await self.groups.get_int_setting(
-                            self.groups.thread_key(
-                                scope=TelegramGroupScope.BUSH,
-                                bush_id=bush.id,
-                                topic=(
-                                    TelegramGroupTopic
-                                    .SUMMARIES
-                                ),
-                            )
-                        )
-                    )
+                bush_thread_key = self.groups.thread_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                    topic=TelegramGroupTopic.SUMMARIES,
+                )
+                bush_chat_id = group_settings.get(
+                    bush_chat_id_key
+                )
+                bush_summary_thread_id = (
+                    group_settings.get(bush_thread_key)
+                    if bush_chat_id is not None
+                    else None
+                )
 
                 if expected == 0:
                     issues.append(
