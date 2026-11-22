@@ -17,6 +17,7 @@ from app.repositories.schedule import ScheduleRepository
 from app.services.group_service import GroupService
 from app.services.closing_service import ClosingService
 from app.services.bush_service import BushService
+from app.services.binding_service import BindingService
 from app.services.cluster_service import ClusterService
 from app.services.store_service import StoreService
 from app.services.opening_service import OpeningService
