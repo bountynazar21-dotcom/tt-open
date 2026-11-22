@@ -516,42 +516,46 @@ class UserService:
             result.unique().all()
         )
 
+        access_by_user, store_bush_ids_by_user = (
+            await self.get_access_internal_many(users)
+        )
+        actor_access = (
+            None
+            if self.is_global_role(actor.role)
+            else await self.get_access_internal(actor)
+        )
+
         items: list[
             UserListItem
         ] = []
 
         for user in users:
-            access_view = (
-                await self.get_access_internal(
-                    user
-                )
-            )
+            access_view = access_by_user[user.id]
+
+            if not self.can_view_user_from_access(
+                actor=actor,
+                target=user,
+                actor_access=actor_access,
+                target_access=access_view,
+                target_store_bush_ids=store_bush_ids_by_user.get(
+                    user.id,
+                    set(),
+                ),
+            ):
+                continue
 
             if (
                 store_id is not None
-                and store_id
-                not in access_view.store_ids
-                and not access_view
-                .has_network_access
+                and store_id not in access_view.store_ids
+                and not access_view.has_network_access
             ):
                 continue
 
             if (
                 bush_id is not None
-                and bush_id
-                not in access_view.bush_ids
-                and not access_view
-                .has_network_access
+                and bush_id not in access_view.bush_ids
+                and not access_view.has_network_access
             ):
-                continue
-
-            try:
-                await self.ensure_can_view_user(
-                    actor=actor,
-                    target=user,
-                )
-
-            except AccessDeniedError:
                 continue
 
             items.append(
