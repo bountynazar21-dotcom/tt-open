@@ -34,6 +34,7 @@ from app.repositories import (
     SummaryUpdateDecision,
 )
 from app.services.access import AccessService
+from app.services.group_service import GroupService
 
 
 EnumType = TypeVar(
@@ -163,6 +164,10 @@ class OpeningService:
         self.access = (
             access_service
             or AccessService(repositories)
+        )
+        self.groups = GroupService(
+            repositories,
+            access_service=self.access,
         )
 
     # ==========================================
@@ -1224,6 +1229,31 @@ class OpeningService:
             )
         }
 
+        summary_data_by_bush = (
+            await self.repositories.openings
+            .get_summary_data_by_bush(
+                business_date=business_date,
+                bush_ids=target_bush_ids,
+            )
+        )
+        summary_store_ids = {
+            record.store_id
+            for data in summary_data_by_bush.values()
+            for key in ("problem_checkins", "waiting_checkins")
+            for record in data[key]
+        }
+        summary_store_map = {
+            store.id: store
+            for store in await self.load_stores(summary_store_ids)
+        }
+        bush_chat_setting_keys = {
+            f"telegram_groups_bush_{bush_id}_chat_id"
+            for bush_id in target_bush_ids
+        }
+        bush_chat_settings = await self.groups.get_int_settings(
+            bush_chat_setting_keys
+        )
+
         for bush_id in sorted(target_bush_ids):
             bush = bushes_by_id.get(bush_id)
 
@@ -1234,9 +1264,9 @@ class OpeningService:
                 await self.build_bush_summary(
                     bush=bush,
                     business_date=business_date,
-                    timezone_name=(
-                        resolved_timezone
-                    ),
+                    timezone_name=resolved_timezone,
+                    summary_data=summary_data_by_bush.get(bush_id),
+                    store_map=summary_store_map,
                 )
             )
 
@@ -1244,15 +1274,8 @@ class OpeningService:
                 bush
             )
 
-            bush_group_id = (
-                await self.repositories.settings
-                .get_int(
-                    (
-                        "telegram_groups_bush_"
-                        f"{bush.id}_chat_id"
-                    ),
-                    default=None,
-                )
+            bush_group_id = bush_chat_settings.get(
+                f"telegram_groups_bush_{bush.id}_chat_id"
             )
 
             target_chat_id = (
@@ -1366,37 +1389,43 @@ class OpeningService:
         bush: Bush,
         business_date: date,
         timezone_name: str,
+        summary_data: dict[str, Any] | None = None,
+        store_map: dict[int, Store] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Формує текст ранкового підсумку куща."""
 
-        statistics = (
-            await self.repositories.openings
-            .get_daily_statistics(
-                business_date=business_date,
-                bush_id=bush.id,
+        if summary_data is None:
+            statistics = (
+                await self.repositories.openings
+                .get_daily_statistics(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        problem_checkins = (
-            await self.repositories.openings
-            .get_problem_records(
-                business_date=business_date,
-                bush_id=bush.id,
+            problem_checkins = (
+                await self.repositories.openings
+                .get_problem_records(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        waiting_checkins = (
-            await self.repositories.openings
-            .get_waiting_for_date(
-                business_date=business_date,
-                bush_id=bush.id,
+            waiting_checkins = (
+                await self.repositories.openings
+                .get_waiting_for_date(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
+        else:
+            statistics = summary_data["statistics"]
+            problem_checkins = summary_data["problem_checkins"]
+            waiting_checkins = summary_data["waiting_checkins"]
 
         problem_lines = (
             await self.build_checkin_lines(
                 problem_checkins,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -1404,6 +1433,7 @@ class OpeningService:
             await self.build_checkin_lines(
                 waiting_checkins,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -1593,21 +1623,23 @@ class OpeningService:
         checkins: list[OpeningCheckin],
         *,
         timezone_name: str,
+        store_map: dict[int, Store] | None = None,
     ) -> list[str]:
         """Формує короткі рядки ТТ для підсумку."""
 
         if not checkins:
             return []
 
-        store_map = {
-            store.id: store
-            for store in await self.load_stores(
-                {
-                    checkin.store_id
-                    for checkin in checkins
-                }
-            )
-        }
+        if store_map is None:
+            store_map = {
+                store.id: store
+                for store in await self.load_stores(
+                    {
+                        checkin.store_id
+                        for checkin in checkins
+                    }
+                )
+            }
 
         timezone = self.get_timezone(
             timezone_name
