@@ -432,10 +432,7 @@ class StoreService:
             result.unique().all()
         )
 
-        return [
-            await self.build_store_view(store)
-            for store in stores
-        ]
+        return await self.build_store_views(stores)
 
     # ==========================================
     # ПОШУК
@@ -582,11 +579,9 @@ class StoreService:
             statement
         )
 
-        return [
-            await self.build_store_view(store)
-            for store
-            in result.unique().all()
-        ]
+        return await self.build_store_views(
+            list(result.unique().all())
+        )
 
     # ==========================================
     # СТВОРЕННЯ ТТ
@@ -2117,109 +2112,94 @@ class StoreService:
     # STORE VIEW
     # ==========================================
 
+    async def build_store_views(
+        self,
+        stores: list[Store],
+    ) -> list[StoreView]:
+        """Builds store views with one query per related entity type."""
+        if not stores:
+            return []
+
+        bush_ids = {
+            store.bush_id
+            for store in stores
+            if store.bush_id is not None
+        }
+        cluster_ids = {
+            store.cluster_id
+            for store in stores
+            if store.cluster_id is not None
+        }
+
+        bushes = {}
+        if bush_ids:
+            result = await self.session.scalars(
+                select(Bush).where(Bush.id.in_(bush_ids))
+            )
+            bushes = {
+                bush.id: bush
+                for bush in result.unique().all()
+            }
+
+        clusters = {}
+        if cluster_ids:
+            result = await self.session.scalars(
+                select(Cluster).where(Cluster.id.in_(cluster_ids))
+            )
+            clusters = {
+                cluster.id: cluster
+                for cluster in result.unique().all()
+            }
+
+        views: list[StoreView] = []
+        for store in stores:
+            bush_id = getattr(store, "bush_id", None)
+            cluster_id = getattr(store, "cluster_id", None)
+            bush = bushes.get(bush_id)
+            cluster = clusters.get(cluster_id)
+
+            views.append(
+                StoreView(
+                    id=store.id,
+                    store_number=self.get_int_attribute(
+                        store, "store_number", "number",
+                    ),
+                    code=self.store_code(store),
+                    name=self.store_name(store),
+                    city=self.get_text_attribute(store, "city"),
+                    address=self.get_text_attribute(store, "address"),
+                    bush_id=bush_id,
+                    bush_name=(
+                        self.get_text_attribute(bush, "name", "title")
+                        if bush is not None else None
+                    ),
+                    cluster_id=cluster_id,
+                    cluster_name=(
+                        self.get_text_attribute(cluster, "name", "title")
+                        if cluster is not None else None
+                    ),
+                    cluster_hour=(
+                        self.get_int_attribute(
+                            cluster, "hour", "opening_hour", "start_hour",
+                        )
+                        if cluster is not None else None
+                    ),
+                    is_active=bool(getattr(store, "is_active", True)),
+                    created_at=getattr(store, "created_at", None),
+                    updated_at=getattr(store, "updated_at", None),
+                    raw_store=store,
+                )
+            )
+
+        return views
+
     async def build_store_view(
         self,
         store: Store,
     ) -> StoreView:
-        """
-        Формує StoreView.
-        """
-
-        bush = None
-        cluster = None
-
-        bush_id = getattr(
-            store,
-            "bush_id",
-            None,
-        )
-
-        cluster_id = getattr(
-            store,
-            "cluster_id",
-            None,
-        )
-
-        if bush_id is not None:
-            bush = await self.session.get(
-                Bush,
-                bush_id,
-            )
-
-        if cluster_id is not None:
-            cluster = await self.session.get(
-                Cluster,
-                cluster_id,
-            )
-
-        return StoreView(
-            id=store.id,
-            store_number=(
-                self.get_int_attribute(
-                    store,
-                    "store_number",
-                    "number",
-                )
-            ),
-            code=self.store_code(store),
-            name=self.store_name(store),
-            city=self.get_text_attribute(
-                store,
-                "city",
-            ),
-            address=self.get_text_attribute(
-                store,
-                "address",
-            ),
-            bush_id=bush_id,
-            bush_name=(
-                self.get_text_attribute(
-                    bush,
-                    "name",
-                    "title",
-                )
-                if bush is not None
-                else None
-            ),
-            cluster_id=cluster_id,
-            cluster_name=(
-                self.get_text_attribute(
-                    cluster,
-                    "name",
-                    "title",
-                )
-                if cluster is not None
-                else None
-            ),
-            cluster_hour=(
-                self.get_int_attribute(
-                    cluster,
-                    "hour",
-                    "opening_hour",
-                    "start_hour",
-                )
-                if cluster is not None
-                else None
-            ),
-            is_active=bool(
-                getattr(
-                    store,
-                    "is_active",
-                    True,
-                )
-            ),
-            created_at=getattr(
-                store,
-                "created_at",
-                None,
-            ),
-            updated_at=getattr(
-                store,
-                "updated_at",
-                None,
-            ),
-            raw_store=store,
-        )
+        """Builds a single StoreView."""
+        views = await self.build_store_views([store])
+        return views[0]
 
     def store_snapshot(
         self,
