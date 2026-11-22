@@ -831,11 +831,15 @@ class OpeningService:
                         checkin.store_id
                     )
 
+                recipients = recipients_by_store.get(store.id)
+                if recipients is None:
+                    recipients = await self.get_alert_recipients(store)
+
                 notification_items.extend(
                     self.build_missed_notification_items(
                         store=store,
                         checkin=checkin,
-                        recipients=recipients_by_store.get(store.id),
+                        recipients=recipients,
                         queued_at=current_time,
                         timezone_name=resolved_timezone,
                     )
