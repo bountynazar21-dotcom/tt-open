@@ -163,6 +163,8 @@ class ScheduleRepository:
     async def get_weekly_schedule(
         self,
         store_id: int,
+        *,
+        for_update: bool = False,
     ) -> list[StoreSchedule]:
         """Повертає весь тижневий графік ТТ."""
 
@@ -175,6 +177,10 @@ class ScheduleRepository:
                 StoreSchedule.weekday.asc()
             )
         )
+        if for_update:
+            statement = statement.with_for_update(
+                of=StoreSchedule
+            )
 
         result = await self.session.scalars(
             statement
