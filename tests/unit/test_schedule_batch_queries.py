@@ -20,6 +20,9 @@ class FakeScalarResult:
     def all(self) -> list[object]:
         return self.rows
 
+    def first(self) -> object | None:
+        return self.rows[0] if self.rows else None
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("store_count", [50, 85])
