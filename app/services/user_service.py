@@ -521,7 +521,7 @@ class UserService:
         )
         actor_access = (
             None
-            if self.is_global_role(actor.role)
+            if self.is_global_role(actor.role) or not users
             else await self.get_access_internal(actor)
         )
 
