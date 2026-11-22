@@ -608,6 +608,8 @@ class AccessService:
         self,
         user: User,
         store_id: int,
+        *,
+        store: Store | None = None,
     ) -> AccessDecision:
         """Перевіряє перегляд конкретної ТТ."""
 
@@ -861,6 +863,7 @@ class AccessService:
         decision = await self.can_view_store(
             user,
             store.id,
+            store=store,
         )
 
         decision.raise_if_denied()
