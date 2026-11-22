@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.database.models.enums import BindingStatus, ClosingStatus, OpeningStatus, StoreStatus, UserRole, UserStatus
+from app.database.models.enums import BindingStatus, ClosingStatus, InviteStatus, OpeningStatus, StoreStatus, UserRole, UserStatus
 from app.database.models.daily_summary import DailySummaryMessage
 from app.database.models.enums import SummaryType
 from app.repositories.daily_summary import DailySummaryRepository
 from app.repositories.binding import BindingRepository
+from app.repositories.invite import InviteRepository
 from app.repositories.system_setting import SystemSettingRepository
 from app.repositories.closing import ClosingRepository
 from app.repositories.opening import OpeningRepository
@@ -1311,3 +1312,29 @@ async def test_create_default_weekly_schedule_uses_one_batch_for_seven_days() ->
     assert [item["is_working_day"] for item in items] == [
         True, True, True, True, True, False, False
     ]
+
+
+
+@pytest.mark.asyncio
+async def test_invite_status_counts_are_aggregated_in_one_query() -> None:
+    session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                one=Mock(return_value=(2, 3, 5, 7))
+            )
+        )
+    )
+    repository = object.__new__(InviteRepository)
+    repository.session = session
+
+    result = await repository.count_by_status(
+        now=datetime(2026, 11, 23, tzinfo=UTC)
+    )
+
+    assert result == {
+        InviteStatus.REVOKED: 2,
+        InviteStatus.USED_UP: 3,
+        InviteStatus.EXPIRED: 5,
+        InviteStatus.ACTIVE: 7,
+    }
+    session.execute.assert_awaited_once()
