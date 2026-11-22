@@ -1705,15 +1705,22 @@ async def closing_total_command(
                 ),
                 "",
             ]
+            statistics_by_bush = await (
+                closing_service.repositories
+                .closings
+                .get_daily_statistics_by_bush(
+                    business_date=business_date,
+                )
+            )
 
             for bush_id, bush_name in bushes:
-                stats = await (
-                    closing_service.repositories
-                    .closings
-                    .get_daily_statistics(
-                        business_date=business_date,
-                        bush_id=bush_id,
-                    )
+                stats = statistics_by_bush.get(
+                    int(bush_id),
+                    {
+                        "expected_count": 0,
+                        "submitted_count": 0,
+                        "total_cash": 0,
+                    },
                 )
 
                 expected = int(

@@ -411,6 +411,226 @@ class DailySummaryRepository(
     # ПЕРЕВІРКА ОНОВЛЕННЯ
     # ==========================================
 
+
+    async def prepare_updates_many(
+        self,
+        *,
+        summary_type: SummaryType,
+        business_date: date,
+        items: list[dict[str, Any]],
+    ) -> list[SummaryUpdateDecision]:
+        """Locks and prepares multiple summaries with a fixed number of queries."""
+        if not items:
+            return []
+
+        normalized_items: list[dict[str, Any]] = []
+        seen_scopes: set[tuple[int, int | None, int | None]] = set()
+        for item in items:
+            chat_id = int(item["chat_id"])
+            bush_id = item.get("bush_id")
+            topic_id = item.get("topic_id")
+            self.validate_scope(
+                summary_type=summary_type,
+                bush_id=bush_id,
+            )
+            self.validate_topic_id(topic_id)
+            scope_key = (chat_id, bush_id, topic_id)
+            if scope_key in seen_scopes:
+                raise ValueError(
+                    "Пакет містить повторну область живого підсумку."
+                )
+            seen_scopes.add(scope_key)
+            normalized_items.append({
+                **item,
+                "chat_id": chat_id,
+                "bush_id": bush_id,
+                "topic_id": topic_id,
+                "message_text": self.normalize_required_text(
+                    item["message_text"],
+                    field_name="Текст підсумку",
+                ),
+            })
+
+        async def load_locked_summaries() -> list[DailySummaryMessage]:
+            result = await self.session.scalars(
+                select(DailySummaryMessage)
+                .where(
+                    DailySummaryMessage.summary_type == summary_type,
+                    DailySummaryMessage.business_date == business_date,
+                )
+                .options(
+                    lazyload(DailySummaryMessage.bush)
+                )
+                .order_by(DailySummaryMessage.id.asc())
+                .with_for_update(of=DailySummaryMessage)
+            )
+            return list(result.unique().all())
+
+        summaries = await load_locked_summaries()
+        summaries_by_scope = {
+            (
+                summary.chat_id,
+                summary.bush_id,
+                summary.topic_id,
+            ): summary
+            for summary in summaries
+        }
+
+        missing_items = [
+            item
+            for item in normalized_items
+            if (
+                item["chat_id"],
+                item["bush_id"],
+                item["topic_id"],
+            ) not in summaries_by_scope
+        ]
+        if missing_items:
+            new_summaries = [
+                DailySummaryMessage.create_pending(
+                    summary_type=summary_type,
+                    business_date=business_date,
+                    bush_id=item["bush_id"],
+                    chat_id=item["chat_id"],
+                    topic_id=item["topic_id"],
+                )
+                for item in missing_items
+            ]
+            try:
+                async with self.session.begin_nested():
+                    self.session.add_all(new_summaries)
+                    await self.session.flush()
+                for item, summary in zip(
+                    missing_items,
+                    new_summaries,
+                    strict=True,
+                ):
+                    summaries_by_scope[
+                        (
+                            item["chat_id"],
+                            item["bush_id"],
+                            item["topic_id"],
+                        )
+                    ] = summary
+            except IntegrityError:
+                # Concurrent creation is rare; re-read once, then use the
+                # established get-or-create path only for any remaining race.
+                summaries = await load_locked_summaries()
+                summaries_by_scope = {
+                    (
+                        summary.chat_id,
+                        summary.bush_id,
+                        summary.topic_id,
+                    ): summary
+                    for summary in summaries
+                }
+                for item in normalized_items:
+                    scope_key = (
+                        item["chat_id"],
+                        item["bush_id"],
+                        item["topic_id"],
+                    )
+                    if scope_key not in summaries_by_scope:
+                        summary, _ = await self.get_or_create(
+                            summary_type=summary_type,
+                            business_date=business_date,
+                            chat_id=item["chat_id"],
+                            bush_id=item["bush_id"],
+                            topic_id=item["topic_id"],
+                            initial_text=None,
+                            snapshot_json=None,
+                        )
+                        summary = await self.get_by_id_or_raise(
+                            summary.id,
+                            for_update=True,
+                        )
+                        summaries_by_scope[scope_key] = summary
+
+        decisions: list[SummaryUpdateDecision] = []
+        for item in normalized_items:
+            summary = summaries_by_scope[
+                (
+                    item["chat_id"],
+                    item["bush_id"],
+                    item["topic_id"],
+                )
+            ]
+            normalized_text = item["message_text"]
+            snapshot_json = item.get("snapshot_json")
+            new_hash = self.build_content_hash(normalized_text)
+
+            old_hash = self.get_first_available_value(
+                summary,
+                names=(
+                    "content_hash",
+                    "last_content_hash",
+                    "message_hash",
+                    "text_hash",
+                ),
+            )
+            if old_hash is None:
+                old_text = self.get_first_available_value(
+                    summary,
+                    names=(
+                        "message_text",
+                        "last_message_text",
+                        "last_text",
+                        "rendered_text",
+                    ),
+                )
+                if isinstance(old_text, str):
+                    old_hash = self.build_content_hash(old_text)
+
+            content_changed = old_hash != new_hash
+            if summary.message_id is None:
+                should_send = True
+                should_edit = False
+                reason = "telegram_message_missing"
+            elif content_changed:
+                should_send = False
+                should_edit = True
+                reason = "content_changed"
+            else:
+                should_send = False
+                should_edit = False
+                reason = "content_unchanged"
+
+            self.set_first_available_value(
+                summary,
+                names=("pending_message_text", "next_message_text"),
+                value=normalized_text,
+            )
+            self.set_first_available_value(
+                summary,
+                names=("pending_snapshot_json", "next_snapshot_json"),
+                value=snapshot_json,
+            )
+            pending_details = dict(summary.details_json or {})
+            if should_send or should_edit:
+                pending_details["_summary_pending_message_text"] = normalized_text
+                if snapshot_json is not None:
+                    pending_details["_summary_pending_snapshot"] = snapshot_json
+                else:
+                    pending_details.pop("_summary_pending_snapshot", None)
+            else:
+                pending_details.pop("_summary_pending_message_text", None)
+                pending_details.pop("_summary_pending_snapshot", None)
+            summary.details_json = pending_details
+            self.session.add(summary)
+
+            decisions.append(
+                SummaryUpdateDecision(
+                    summary=summary,
+                    should_send=should_send,
+                    should_edit=should_edit,
+                    content_changed=content_changed,
+                    reason=reason,
+                )
+            )
+
+        await self.session.flush()
+        return decisions
+
     async def prepare_update(
         self,
         *,

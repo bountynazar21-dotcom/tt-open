@@ -635,21 +635,25 @@ async def _prime_bush_status_cache(
     from app.database.models.opening_checkin import (
         OpeningCheckin,
     )
-    from app.utils.datetime import today_local
+    from app.utils.datetime import closing_business_date, now_local, today_local
 
     today = today_local()
+    closing_date = closing_business_date(now_local())
+    cache_key = (today, closing_date)
 
     if (
         data.get(
             "_bush_status_cache_date"
         )
-        == today
+        == cache_key
     ):
         return
 
+    repositories = data.get("repositories")
     session = (
         data.get("session")
         or data.get("db_session")
+        or getattr(repositories, "session", None)
     )
 
     if session is None:
@@ -673,7 +677,7 @@ async def _prime_bush_status_cache(
                 ClosingReport
             ).where(
                 ClosingReport.business_date
-                == today
+                == closing_date
             )
         )
 
@@ -719,12 +723,13 @@ async def _prime_bush_status_cache(
 
     data[
         "_bush_status_cache_date"
-    ] = today
+    ] = cache_key
 
     logger.info(
         "Bush bulk cache ready | "
-        "date=%s openings=%s closings=%s",
+        "opening_date=%s closing_date=%s openings=%s closings=%s",
         today,
+        closing_date,
         len(opening_rows),
         len(closing_rows),
     )
@@ -1055,60 +1060,70 @@ async def query_bush_users(
                         user_id
                     ] = item
 
-        get_store_users = getattr(
+        bush_stores = []
+        try:
+            bush_stores = await load_bush_stores(
+                bush_id=bush_id,
+                data=data,
+            )
+        except Exception:
+            logger.exception(
+                "Failed loading stores for bush users | bush_id=%s",
+                bush_id,
+            )
+
+        store_ids = {
+            to_int(first_attr(store, "id", "store_id", default=0))
+            for store in bush_stores
+        }
+        store_ids.discard(0)
+
+        get_users_for_stores = getattr(
             bindings_repository,
-            "get_users_for_store",
+            "get_users_for_stores",
             None,
         )
-
-        if callable(get_store_users):
+        if callable(get_users_for_stores) and store_ids:
             try:
-                bush_stores = (
-                    await load_bush_stores(
-                        bush_id=bush_id,
-                        data=data,
-                    )
+                store_users = await get_users_for_stores(
+                    store_ids,
+                    active_only=False,
                 )
             except Exception:
-                bush_stores = []
-
-            for store in bush_stores:
-                store_id = to_int(
-                    first_attr(
-                        store,
-                        "id",
-                        "store_id",
-                        default=0,
-                    )
+                logger.exception(
+                    "Batch store-user lookup failed | bush_id=%s",
+                    bush_id,
                 )
+                store_users = []
 
-                if store_id <= 0:
-                    continue
-
-                try:
-                    store_users = (
-                        await get_store_users(
+            for item in store_users:
+                user_id = to_int(
+                    first_attr(item, "id", "user_id", default=0)
+                )
+                if user_id > 0:
+                    users_by_id[user_id] = item
+        else:
+            get_store_users = getattr(
+                bindings_repository,
+                "get_users_for_store",
+                None,
+            )
+            if callable(get_store_users):
+                for store_id in sorted(store_ids):
+                    try:
+                        store_users = await get_store_users(
                             store_id,
                             active_only=False,
                         )
-                    )
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
 
-                for item in store_users:
-                    user_id = to_int(
-                        first_attr(
-                            item,
-                            "id",
-                            "user_id",
-                            default=0,
+                    for item in store_users:
+                        user_id = to_int(
+                            first_attr(item, "id", "user_id", default=0)
                         )
-                    )
-
-                    if user_id > 0:
-                        users_by_id[
-                            user_id
-                        ] = item
+                        if user_id > 0:
+                            users_by_id[user_id] = item
 
         if users_by_id:
             return list(
@@ -2881,6 +2896,22 @@ async def bush_admin_missing_closing_callback(
         data=data,
     )
 
+    await _prime_bush_status_cache(
+        data=data,
+    )
+    opening_by_store = data.get(
+        "_bush_opening_by_store",
+        {},
+    )
+    closing_by_store = data.get(
+        "_bush_closing_by_store",
+        {},
+    )
+    has_bulk_cache = (
+        data.get("_bush_status_cache_date")
+        is not None
+    )
+
     missing_items: list[
         BushAdminStoreItem
     ] = []
@@ -2895,11 +2926,14 @@ async def bush_admin_missing_closing_callback(
             store
         )
 
-        opening = await get_opening_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            opening = opening_by_store.get(store_id)
+        else:
+            opening = await get_opening_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
         # Якщо ТТ сьогодні взагалі
         # не відкривалася — не рахуємо
@@ -2909,11 +2943,14 @@ async def bush_admin_missing_closing_callback(
         ):
             continue
 
-        closing = await get_closing_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            closing = closing_by_store.get(store_id)
+        else:
+            closing = await get_closing_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
         if result_is_completed(
             closing

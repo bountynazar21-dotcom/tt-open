@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import (
     func,
@@ -409,6 +409,121 @@ class NotificationRepository(
             await self.session.flush()
 
         return existing, False
+
+    async def get_or_create_many_from_parts(
+        self,
+        items: Iterable[dict[str, Any]],
+    ) -> tuple[list[NotificationLog], int]:
+        """
+        Atomically create a batch of deduplicated pending notifications.
+
+        Returns notifications in input order and the number of newly
+        inserted logical messages. Existing rows are never overwritten.
+        """
+        pending_by_key: dict[str, NotificationLog] = {}
+        ordered_keys: list[str] = []
+
+        for item in items:
+            notification_type = item["notification_type"]
+            business_date = item.get("business_date")
+            recipient_user_id = item.get("recipient_user_id")
+            store_id = item.get("store_id")
+            bush_id = item.get("bush_id")
+            chat_id = item.get("chat_id")
+            topic_id = item.get("topic_id")
+            suffix = item.get("suffix")
+
+            dedupe_key = NotificationLog.build_dedupe_key(
+                notification_type=notification_type,
+                business_date=business_date,
+                recipient_user_id=recipient_user_id,
+                store_id=store_id,
+                bush_id=bush_id,
+                chat_id=chat_id,
+                suffix=suffix,
+            )
+            if topic_id is not None:
+                dedupe_key = f"{dedupe_key}:topic-{topic_id}"
+            dedupe_key = self.normalize_dedupe_key(dedupe_key)
+            scheduled_for = item.get("scheduled_for")
+            if scheduled_for is not None:
+                self.validate_aware_datetime(
+                    scheduled_for,
+                    field_name="scheduled_for",
+                )
+            ordered_keys.append(dedupe_key)
+
+            if dedupe_key in pending_by_key:
+                continue
+
+            pending_by_key[dedupe_key] = NotificationLog.create_pending(
+                notification_type=notification_type,
+                dedupe_key=dedupe_key,
+                business_date=business_date,
+                scheduled_for=item.get("scheduled_for"),
+                recipient_user_id=recipient_user_id,
+                store_id=store_id,
+                bush_id=bush_id,
+                chat_id=chat_id,
+                topic_id=topic_id,
+                message_text=item.get("message_text"),
+                payload_json=item.get("payload_json"),
+            )
+
+        if not pending_by_key:
+            return [], 0
+
+        values = [
+            {
+                "notification_type": pending.notification_type,
+                "status": pending.status,
+                "dedupe_key": pending.dedupe_key,
+                "idempotency_hash": pending.idempotency_hash,
+                "business_date": pending.business_date,
+                "scheduled_for": pending.scheduled_for,
+                "recipient_user_id": pending.recipient_user_id,
+                "store_id": pending.store_id,
+                "bush_id": pending.bush_id,
+                "chat_id": pending.chat_id,
+                "topic_id": pending.topic_id,
+                "message_text": pending.message_text,
+                "payload_json": pending.payload_json,
+                "attempt_count": 0,
+            }
+            for pending in pending_by_key.values()
+        ]
+
+        inserted_result = await self.session.scalars(
+            pg_insert(NotificationLog)
+            .values(values)
+            .on_conflict_do_nothing(
+                index_elements=[NotificationLog.dedupe_key]
+            )
+            .returning(NotificationLog.dedupe_key)
+        )
+        created_keys = set(inserted_result.all())
+
+        existing_result = await self.session.scalars(
+            select(NotificationLog).where(
+                NotificationLog.dedupe_key.in_(set(pending_by_key))
+            )
+        )
+        notifications_by_key = {
+            notification.dedupe_key: notification
+            for notification in existing_result.unique().all()
+        }
+
+        missing_keys = set(pending_by_key) - set(notifications_by_key)
+        if missing_keys:
+            raise RuntimeError(
+                "Batch notification insert completed without returning "
+                f"all dedupe keys: {sorted(missing_keys)}"
+            )
+
+        return (
+            [notifications_by_key[key] for key in ordered_keys],
+            len(created_keys),
+        )
 
     async def get_or_create_from_parts(
         self,

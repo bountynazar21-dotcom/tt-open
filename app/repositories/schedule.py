@@ -163,18 +163,35 @@ class ScheduleRepository:
     async def get_weekly_schedule(
         self,
         store_id: int,
+        *,
+        weekdays: set[int] | None = None,
+        for_update: bool = False,
     ) -> list[StoreSchedule]:
-        """Повертає весь тижневий графік ТТ."""
+        """Повертає весь або вибрані дні графіка ТТ."""
+
+        conditions = [
+            StoreSchedule.store_id == store_id
+        ]
+        if weekdays is not None:
+            for weekday in weekdays:
+                self.validate_weekday(weekday)
+            if not weekdays:
+                return []
+            conditions.append(
+                StoreSchedule.weekday.in_(weekdays)
+            )
 
         statement = (
             select(StoreSchedule)
-            .where(
-                StoreSchedule.store_id == store_id
-            )
+            .where(*conditions)
             .order_by(
                 StoreSchedule.weekday.asc()
             )
         )
+        if for_update:
+            statement = statement.with_for_update(
+                of=StoreSchedule
+            )
 
         result = await self.session.scalars(
             statement
@@ -183,6 +200,96 @@ class ScheduleRepository:
         return list(
             result.unique().all()
         )
+
+    async def upsert_weekday_schedules_many(
+        self,
+        *,
+        store_id: int,
+        items: list[dict[str, object]],
+        existing_schedules: list[StoreSchedule] | None = None,
+    ) -> list[tuple[StoreSchedule, bool]]:
+        """Creates/updates multiple weekdays after one locked read."""
+        if not items:
+            return []
+
+        normalized_items: list[dict[str, object]] = []
+        seen_weekdays: set[int] = set()
+        for item in items:
+            weekday = int(item["weekday"])
+            self.validate_weekday(weekday)
+            if weekday in seen_weekdays:
+                raise ValueError(
+                    "Пакет містить повторний день тижня."
+                )
+            seen_weekdays.add(weekday)
+            normalized = self.validate_schedule_values(
+                is_working_day=bool(item["is_working_day"]),
+                opening_time=item.get("opening_time"),
+                opening_control_deadline=item.get(
+                    "opening_control_deadline"
+                ),
+                closing_time=item.get("closing_time"),
+                closing_control_deadline=item.get(
+                    "closing_control_deadline"
+                ),
+            )
+            normalized_items.append({
+                "weekday": weekday,
+                "is_working_day": bool(item["is_working_day"]),
+                **normalized,
+            })
+
+        if existing_schedules is None:
+            existing_schedules = await self.get_weekly_schedule(
+                store_id,
+                weekdays=seen_weekdays,
+                for_update=True,
+            )
+
+        existing_by_weekday = {
+            schedule.weekday: schedule
+            for schedule in existing_schedules
+        }
+        results: list[tuple[StoreSchedule, bool]] = []
+        changed_objects: list[StoreSchedule] = []
+
+        for item in normalized_items:
+            weekday = int(item["weekday"])
+            schedule = existing_by_weekday.get(weekday)
+            was_created = schedule is None
+
+            if schedule is None:
+                schedule = StoreSchedule(
+                    store_id=store_id,
+                    weekday=weekday,
+                    is_working_day=bool(item["is_working_day"]),
+                    opening_time=item["opening_time"],
+                    opening_control_deadline=item[
+                        "opening_control_deadline"
+                    ],
+                    closing_time=item["closing_time"],
+                    closing_control_deadline=item[
+                        "closing_control_deadline"
+                    ],
+                )
+                existing_by_weekday[weekday] = schedule
+            else:
+                schedule.is_working_day = bool(item["is_working_day"])
+                schedule.opening_time = item["opening_time"]
+                schedule.opening_control_deadline = item[
+                    "opening_control_deadline"
+                ]
+                schedule.closing_time = item["closing_time"]
+                schedule.closing_control_deadline = item[
+                    "closing_control_deadline"
+                ]
+
+            changed_objects.append(schedule)
+            results.append((schedule, was_created))
+
+        self.session.add_all(changed_objects)
+        await self.session.flush()
+        return results
 
     async def upsert_weekday_schedule(
         self,
@@ -332,41 +439,45 @@ class ScheduleRepository:
         if not normalized_target_days:
             return []
 
-        schedules: list[StoreSchedule] = []
-
         for weekday in normalized_target_days:
             self.validate_weekday(weekday)
 
-            if weekday == source_weekday:
-                continue
+        target_days = [
+            weekday
+            for weekday in normalized_target_days
+            if weekday != source_weekday
+        ]
+        if not target_days:
+            return []
 
-            schedule, _ = (
-                await self.upsert_weekday_schedule(
-                    store_id=store_id,
-                    weekday=weekday,
-                    is_working_day=(
-                        source.is_working_day
+        existing_schedules = await self.get_weekly_schedule(
+            store_id,
+            weekdays=set(target_days),
+            for_update=True,
+        )
+        results = await self.upsert_weekday_schedules_many(
+            store_id=store_id,
+            items=[
+                {
+                    "weekday": weekday,
+                    "is_working_day": source.is_working_day,
+                    "opening_time": source.opening_time,
+                    "opening_control_deadline": (
+                        source.opening_control_deadline
                     ),
-                    opening_time=(
-                        source.opening_time
+                    "closing_time": source.closing_time,
+                    "closing_control_deadline": (
+                        source.closing_control_deadline
                     ),
-                    opening_control_deadline=(
-                        source
-                        .opening_control_deadline
-                    ),
-                    closing_time=(
-                        source.closing_time
-                    ),
-                    closing_control_deadline=(
-                        source
-                        .closing_control_deadline
-                    ),
-                )
-            )
-
-            schedules.append(schedule)
-
-        return schedules
+                }
+                for weekday in target_days
+            ],
+            existing_schedules=existing_schedules,
+        )
+        return [
+            schedule
+            for schedule, _ in results
+        ]
 
     async def delete_weekday_schedule(
         self,
@@ -989,6 +1100,193 @@ class ScheduleRepository:
     # ФАКТИЧНИЙ ГРАФІК
     # ==========================================
 
+    async def get_effective_schedules_for_store_range(
+        self,
+        *,
+        store: Store,
+        date_from: date,
+        date_to: date,
+    ) -> list[EffectiveSchedule]:
+        """Resolve a store's effective schedule for a date range in batches."""
+        if date_to < date_from:
+            return []
+
+        dates: list[date] = []
+        current_date = date_from
+        while current_date <= date_to:
+            dates.append(current_date)
+            current_date = date.fromordinal(current_date.toordinal() + 1)
+
+        if (
+            not store.is_active
+            or store.status == StoreStatus.INACTIVE
+        ):
+            return [
+                EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=day,
+                    is_working_day=False,
+                    source="store_inactive",
+                    reason="Торгова точка деактивована",
+                )
+                for day in dates
+            ]
+
+        if store.status == StoreStatus.TEMPORARILY_CLOSED:
+            return [
+                EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=day,
+                    is_working_day=False,
+                    source="store_temporarily_closed",
+                    reason="Торгова точка тимчасово закрита",
+                )
+                for day in dates
+            ]
+
+        store_exception_result = await self.session.scalars(
+            select(ScheduleException).where(
+                ScheduleException.store_id == store.id,
+                ScheduleException.exception_date >= date_from,
+                ScheduleException.exception_date <= date_to,
+            )
+        )
+        store_exceptions = {
+            item.exception_date: item
+            for item in store_exception_result.unique().all()
+        }
+
+        bush_exceptions = {}
+        if store.bush_id is not None:
+            bush_result = await self.session.scalars(
+                select(ScheduleException).where(
+                    ScheduleException.bush_id == store.bush_id,
+                    ScheduleException.store_id.is_(None),
+                    ScheduleException.exception_date >= date_from,
+                    ScheduleException.exception_date <= date_to,
+                )
+            )
+            bush_exceptions = {
+                item.exception_date: item
+                for item in bush_result.unique().all()
+            }
+
+        network_result = await self.session.scalars(
+            select(ScheduleException).where(
+                ScheduleException.store_id.is_(None),
+                ScheduleException.bush_id.is_(None),
+                ScheduleException.exception_date >= date_from,
+                ScheduleException.exception_date <= date_to,
+            )
+        )
+        network_exceptions = {
+            item.exception_date: item
+            for item in network_result.unique().all()
+        }
+
+        weekdays = {day.weekday() for day in dates}
+        weekday_result = await self.session.scalars(
+            select(StoreSchedule).where(
+                StoreSchedule.store_id == store.id,
+                StoreSchedule.weekday.in_(weekdays),
+            )
+        )
+        weekday_schedules = {
+            item.weekday: item
+            for item in weekday_result.unique().all()
+        }
+
+        cluster = None
+        if store.cluster_id is not None:
+            cluster = await self.session.get(Cluster, store.cluster_id)
+
+        schedules: list[EffectiveSchedule] = []
+        for day in dates:
+            exception = store_exceptions.get(day)
+            source = "store_exception"
+
+            if exception is None:
+                exception = bush_exceptions.get(day)
+                source = "bush_exception"
+
+            if exception is None:
+                exception = network_exceptions.get(day)
+                source = "network_exception"
+
+            if exception is not None:
+                schedules.append(
+                    self.schedule_from_exception(
+                        store=store,
+                        business_date=day,
+                        exception=exception,
+                        source=source,
+                    )
+                )
+                continue
+
+            weekday_schedule = weekday_schedules.get(day.weekday())
+            if weekday_schedule is not None:
+                schedules.append(
+                    EffectiveSchedule(
+                        store_id=store.id,
+                        business_date=day,
+                        is_working_day=weekday_schedule.is_working_day,
+                        source="store_weekly_schedule",
+                        opening_time=(
+                            weekday_schedule.opening_time
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        opening_control_deadline=(
+                            weekday_schedule.opening_control_deadline
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        closing_time=(
+                            weekday_schedule.closing_time
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        closing_control_deadline=(
+                            weekday_schedule.closing_control_deadline
+                            if weekday_schedule.is_working_day else None
+                        ),
+                        reason=(
+                            None
+                            if weekday_schedule.is_working_day
+                            else "Постійний вихідний день"
+                        ),
+                    )
+                )
+                continue
+
+            if cluster is not None and cluster.is_active:
+                schedules.append(
+                    EffectiveSchedule(
+                        store_id=store.id,
+                        business_date=day,
+                        is_working_day=True,
+                        source="cluster_default",
+                        opening_time=cluster.opening_time,
+                        opening_control_deadline=cluster.opening_control_deadline,
+                        closing_time=cluster.default_closing_time,
+                        closing_control_deadline=cluster.default_closing_control_deadline,
+                    )
+                )
+                continue
+
+            schedules.append(
+                EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=day,
+                    is_working_day=False,
+                    source="schedule_missing",
+                    reason=(
+                        "Для торгової точки не налаштовано "
+                        "графік або часовий кластер"
+                    ),
+                )
+            )
+
+        return schedules
+
     async def get_effective_schedule(
         self,
         *,
@@ -1238,38 +1536,211 @@ class ScheduleRepository:
             result.unique().all()
         )
 
+    async def _get_effective_schedules_for_stores(
+        self,
+        *,
+        stores: list[Store],
+        business_date: date,
+    ) -> list[tuple[Store, EffectiveSchedule]]:
+        """
+        Calculates effective schedules for many stores using a fixed
+        number of queries instead of querying each store independently.
+        """
+        if not stores:
+            return []
+
+        store_ids = {store.id for store in stores}
+        bush_ids = {
+            store.bush_id
+            for store in stores
+            if store.bush_id is not None
+        }
+        cluster_ids = {
+            store.cluster_id
+            for store in stores
+            if store.cluster_id is not None
+        }
+
+        store_exception_result = await self.session.scalars(
+            select(ScheduleException).where(
+                ScheduleException.store_id.in_(store_ids),
+                ScheduleException.exception_date == business_date,
+            )
+        )
+        store_exceptions = {
+            item.store_id: item
+            for item in store_exception_result.unique().all()
+        }
+
+        bush_exceptions = {}
+        if bush_ids:
+            bush_exception_result = await self.session.scalars(
+                select(ScheduleException).where(
+                    ScheduleException.bush_id.in_(bush_ids),
+                    ScheduleException.store_id.is_(None),
+                    ScheduleException.exception_date == business_date,
+                )
+            )
+            bush_exceptions = {
+                item.bush_id: item
+                for item in bush_exception_result.unique().all()
+            }
+
+        network_exception = await self.get_network_exception(
+            exception_date=business_date,
+        )
+
+        weekday_result = await self.session.scalars(
+            select(StoreSchedule).where(
+                StoreSchedule.store_id.in_(store_ids),
+                StoreSchedule.weekday == business_date.weekday(),
+            )
+        )
+        weekday_schedules = {
+            item.store_id: item
+            for item in weekday_result.unique().all()
+        }
+
+        clusters = {}
+        if cluster_ids:
+            cluster_result = await self.session.scalars(
+                select(Cluster).where(Cluster.id.in_(cluster_ids))
+            )
+            clusters = {
+                item.id: item
+                for item in cluster_result.unique().all()
+            }
+
+        result: list[tuple[Store, EffectiveSchedule]] = []
+
+        for store in stores:
+            if (
+                not store.is_active
+                or store.status == StoreStatus.INACTIVE
+            ):
+                schedule = EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=business_date,
+                    is_working_day=False,
+                    source="store_inactive",
+                    reason="Торгова точка деактивована",
+                )
+            elif store.status == StoreStatus.TEMPORARILY_CLOSED:
+                schedule = EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=business_date,
+                    is_working_day=False,
+                    source="store_temporarily_closed",
+                    reason="Торгова точка тимчасово закрита",
+                )
+            elif store.id in store_exceptions:
+                schedule = self.schedule_from_exception(
+                    store=store,
+                    business_date=business_date,
+                    exception=store_exceptions[store.id],
+                    source="store_exception",
+                )
+            elif (
+                store.bush_id is not None
+                and store.bush_id in bush_exceptions
+            ):
+                schedule = self.schedule_from_exception(
+                    store=store,
+                    business_date=business_date,
+                    exception=bush_exceptions[store.bush_id],
+                    source="bush_exception",
+                )
+            elif network_exception is not None:
+                schedule = self.schedule_from_exception(
+                    store=store,
+                    business_date=business_date,
+                    exception=network_exception,
+                    source="network_exception",
+                )
+            elif store.id in weekday_schedules:
+                weekday_schedule = weekday_schedules[store.id]
+                schedule = EffectiveSchedule(
+                    store_id=store.id,
+                    business_date=business_date,
+                    is_working_day=weekday_schedule.is_working_day,
+                    source="store_weekly_schedule",
+                    opening_time=(
+                        weekday_schedule.opening_time
+                        if weekday_schedule.is_working_day
+                        else None
+                    ),
+                    opening_control_deadline=(
+                        weekday_schedule.opening_control_deadline
+                        if weekday_schedule.is_working_day
+                        else None
+                    ),
+                    closing_time=(
+                        weekday_schedule.closing_time
+                        if weekday_schedule.is_working_day
+                        else None
+                    ),
+                    closing_control_deadline=(
+                        weekday_schedule.closing_control_deadline
+                        if weekday_schedule.is_working_day
+                        else None
+                    ),
+                    reason=(
+                        None
+                        if weekday_schedule.is_working_day
+                        else "Постійний вихідний день"
+                    ),
+                )
+            else:
+                cluster = clusters.get(store.cluster_id)
+                if cluster is not None and cluster.is_active:
+                    schedule = EffectiveSchedule(
+                        store_id=store.id,
+                        business_date=business_date,
+                        is_working_day=True,
+                        source="cluster_default",
+                        opening_time=cluster.opening_time,
+                        opening_control_deadline=cluster.opening_control_deadline,
+                        closing_time=cluster.default_closing_time,
+                        closing_control_deadline=cluster.default_closing_control_deadline,
+                    )
+                else:
+                    schedule = EffectiveSchedule(
+                        store_id=store.id,
+                        business_date=business_date,
+                        is_working_day=False,
+                        source="schedule_missing",
+                        reason=(
+                            "Для торгової точки не налаштовано "
+                            "графік або часовий кластер"
+                        ),
+                    )
+
+            result.append((store, schedule))
+
+        return result
+
     async def get_stores_requiring_opening(
         self,
         *,
         business_date: date,
         bush_id: int | None = None,
         cluster_id: int | None = None,
-    ) -> list[
-        tuple[Store, EffectiveSchedule]
-    ]:
+    ) -> list[tuple[Store, EffectiveSchedule]]:
         """Повертає ТТ, які повинні відкритися."""
 
         stores = await self.get_filtered_stores(
             bush_id=bush_id,
             cluster_id=cluster_id,
         )
-
-        result: list[
-            tuple[Store, EffectiveSchedule]
-        ] = []
-
-        for store in stores:
-            schedule = await self.get_effective_schedule(
-                store=store,
-                business_date=business_date,
-            )
-
-            if schedule.requires_opening:
-                result.append(
-                    (store, schedule)
-                )
-
-        return result
+        schedules = await self._get_effective_schedules_for_stores(
+            stores=stores,
+            business_date=business_date,
+        )
+        return [
+            (store, schedule)
+            for store, schedule in schedules
+            if schedule.requires_opening
+        ]
 
     async def get_stores_requiring_closing(
         self,
@@ -1277,32 +1748,22 @@ class ScheduleRepository:
         business_date: date,
         bush_id: int | None = None,
         cluster_id: int | None = None,
-    ) -> list[
-        tuple[Store, EffectiveSchedule]
-    ]:
+    ) -> list[tuple[Store, EffectiveSchedule]]:
         """Повертає ТТ, які повинні подати звіт."""
 
         stores = await self.get_filtered_stores(
             bush_id=bush_id,
             cluster_id=cluster_id,
         )
-
-        result: list[
-            tuple[Store, EffectiveSchedule]
-        ] = []
-
-        for store in stores:
-            schedule = await self.get_effective_schedule(
-                store=store,
-                business_date=business_date,
-            )
-
-            if schedule.requires_closing:
-                result.append(
-                    (store, schedule)
-                )
-
-        return result
+        schedules = await self._get_effective_schedules_for_stores(
+            stores=stores,
+            business_date=business_date,
+        )
+        return [
+            (store, schedule)
+            for store, schedule in schedules
+            if schedule.requires_closing
+        ]
 
     async def get_opening_stores_for_minute(
         self,
@@ -1472,46 +1933,40 @@ class ScheduleRepository:
         for weekday in active_days:
             self.validate_weekday(weekday)
 
-        schedules: list[StoreSchedule] = []
-
-        for weekday in range(7):
-            is_working_day = (
-                weekday in active_days
-            )
-
-            schedule, _ = (
-                await self.upsert_weekday_schedule(
-                    store_id=store_id,
-                    weekday=weekday,
-                    is_working_day=(
-                        is_working_day
-                    ),
-                    opening_time=(
+        results = await self.upsert_weekday_schedules_many(
+            store_id=store_id,
+            items=[
+                {
+                    "weekday": weekday,
+                    "is_working_day": weekday in active_days,
+                    "opening_time": (
                         opening_time
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                    opening_control_deadline=(
+                    "opening_control_deadline": (
                         opening_control_deadline
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                    closing_time=(
+                    "closing_time": (
                         closing_time
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                    closing_control_deadline=(
+                    "closing_control_deadline": (
                         closing_control_deadline
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                )
-            )
-
-            schedules.append(schedule)
-
-        return schedules
+                }
+                for weekday in range(7)
+            ],
+        )
+        return [
+            schedule
+            for schedule, _ in results
+        ]
 
     # ==========================================
     # ДОПОМІЖНІ МЕТОДИ

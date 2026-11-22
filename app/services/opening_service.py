@@ -34,6 +34,7 @@ from app.repositories import (
     SummaryUpdateDecision,
 )
 from app.services.access import AccessService
+from app.services.group_service import GroupService
 
 
 EnumType = TypeVar(
@@ -163,6 +164,10 @@ class OpeningService:
         self.access = (
             access_service
             or AccessService(repositories)
+        )
+        self.groups = GroupService(
+            repositories,
+            access_service=self.access,
         )
 
     # ==========================================
@@ -785,6 +790,16 @@ class OpeningService:
             )
         )
 
+        missed_store_ids = {
+            checkin.store_id
+            for checkin in missed_checkins
+        }
+        missed_stores = await self.load_stores(missed_store_ids)
+        missed_stores_by_id = {
+            store.id: store
+            for store in missed_stores
+        }
+
         notifications: list[
             NotificationLog
         ] = []
@@ -801,46 +816,64 @@ class OpeningService:
             )
         )
 
+        recipients_by_store: dict[int, list[User]] = {}
+        if (
+            create_notifications
+            and notifications_enabled
+            and missed_stores
+        ):
+            recipients_by_store = (
+                await self.get_alert_recipients_for_stores(
+                    missed_stores
+                )
+            )
+
         if (
             create_notifications
             and notifications_enabled
         ):
+            notification_items: list[dict[str, Any]] = []
             for checkin in missed_checkins:
-                store = (
-                    await self.access
-                    .get_store_or_raise(
+                store = missed_stores_by_id.get(checkin.store_id)
+                if store is None:
+                    store = await self.access.get_store_or_raise(
                         checkin.store_id
                     )
-                )
 
-                queued, created_count = (
-                    await self.queue_missed_notifications(
+                recipients = recipients_by_store.get(store.id)
+                if recipients is None:
+                    recipients = await self.get_alert_recipients(store)
+
+                notification_items.extend(
+                    self.build_missed_notification_items(
                         store=store,
                         checkin=checkin,
+                        recipients=recipients,
                         queued_at=current_time,
-                        timezone_name=(
-                            resolved_timezone
-                        ),
+                        timezone_name=resolved_timezone,
                     )
                 )
 
-                notifications.extend(queued)
-                created_notifications += (
-                    created_count
+            if notification_items:
+                (
+                    notifications,
+                    created_notifications,
+                ) = (
+                    await self.repositories.notifications
+                    .get_or_create_many_from_parts(
+                        notification_items
+                    )
                 )
-
-                existing_notifications += (
-                    len(queued)
-                    - created_count
+                existing_notifications = (
+                    len(notifications) - created_notifications
                 )
 
         for checkin in missed_checkins:
-            store = (
-                await self.access
-                .get_store_or_raise(
+            store = missed_stores_by_id.get(checkin.store_id)
+            if store is None:
+                store = await self.access.get_store_or_raise(
                     checkin.store_id
                 )
-            )
 
             await self.log_missed_deadline(
                 store=store,
@@ -858,13 +891,7 @@ class OpeningService:
         ):
             changed_bush_ids = {
                 store.bush_id
-                for store in await self.load_stores(
-                    {
-                        checkin.store_id
-                        for checkin
-                        in missed_checkins
-                    }
-                )
+                for store in missed_stores
                 if store.bush_id is not None
             }
 
@@ -899,6 +926,58 @@ class OpeningService:
     # СПОВІЩЕННЯ ПРО ПРОПУЩЕНИЙ ДЕДЛАЙН
     # ==========================================
 
+    def build_missed_notification_items(
+        self,
+        *,
+        store: Store,
+        checkin: OpeningCheckin,
+        recipients: list[User] | None,
+        queued_at: datetime,
+        timezone_name: str,
+    ) -> list[dict[str, Any]]:
+        """Build deduplicated notification payloads without database I/O."""
+        if not recipients:
+            return []
+
+        notification_type = self.resolve_notification_type(
+            "opening_missed",
+            "opening_deadline_missed",
+            "opening_alert",
+            "store_not_opened",
+        )
+        message_text = self.build_missed_notification_text(
+            store=store,
+            checkin=checkin,
+            timezone_name=timezone_name,
+        )
+
+        items: list[dict[str, Any]] = []
+        for recipient in recipients:
+            if recipient.telegram_id is None:
+                continue
+            items.append({
+                "notification_type": notification_type,
+                "business_date": checkin.business_date,
+                "recipient_user_id": recipient.id,
+                "store_id": store.id,
+                "bush_id": store.bush_id,
+                "chat_id": recipient.telegram_id,
+                "suffix": "opening-deadline-missed",
+                "scheduled_for": queued_at,
+                "message_text": message_text,
+                "payload_json": {
+                    "parse_mode": "HTML",
+                    "checkin_id": checkin.id,
+                    "store_id": store.id,
+                    "store_code": store.code,
+                    "business_date": checkin.business_date.isoformat(),
+                    "scheduled_open_time": checkin.scheduled_open_time.strftime("%H:%M"),
+                    "control_deadline": checkin.control_deadline.strftime("%H:%M"),
+                    "recipient_role": recipient.role.value,
+                },
+            })
+        return items
+
     async def queue_missed_notifications(
         self,
         *,
@@ -906,112 +985,89 @@ class OpeningService:
         checkin: OpeningCheckin,
         queued_at: datetime,
         timezone_name: str,
+        recipients: list[User] | None = None,
     ) -> tuple[list[NotificationLog], int]:
-        """
-        Створює повідомлення для:
+        """Create missed-opening notifications for one store."""
+        if recipients is None:
+            recipients = await self.get_alert_recipients(store)
 
-        - працівників ТТ;
-        - адміністратора куща;
-        - левів куща;
-        - директора;
-        - ROOT_ADMIN.
-        """
-
-        recipients = await self.get_alert_recipients(
-            store
+        items = self.build_missed_notification_items(
+            store=store,
+            checkin=checkin,
+            recipients=recipients,
+            queued_at=queued_at,
+            timezone_name=timezone_name,
         )
-
-        if not recipients:
+        if not items:
             return [], 0
 
-        notification_type = (
-            self.resolve_notification_type(
-                "opening_missed",
-                "opening_deadline_missed",
-                "opening_alert",
-                "store_not_opened",
-            )
+        return await self.repositories.notifications.get_or_create_many_from_parts(
+            items
         )
 
-        message_text = (
-            self.build_missed_notification_text(
-                store=store,
-                checkin=checkin,
-                timezone_name=timezone_name,
-            )
-        )
+    async def get_alert_recipients_for_stores(
+        self,
+        stores: list[Store],
+    ) -> dict[int, list[User]]:
+        """Load bush recipients and root admins once for a store batch."""
+        if not stores:
+            return {}
 
-        notifications: list[
-            NotificationLog
-        ] = []
+        from app.database.models.binding import UserBushBinding
+        from app.database.models.enums import BindingStatus
 
-        created_count = 0
+        bush_ids = {
+            store.bush_id
+            for store in stores
+            if store.bush_id is not None
+        }
+        recipients_by_bush: dict[int, dict[int, User]] = {}
 
-        for recipient in recipients:
-            if recipient.telegram_id is None:
-                continue
-
-            notification, was_created = (
-                await self.repositories.notifications
-                .get_or_create_from_parts(
-                    notification_type=(
-                        notification_type
-                    ),
-                    business_date=(
-                        checkin.business_date
-                    ),
-                    recipient_user_id=(
-                        recipient.id
-                    ),
-                    store_id=store.id,
-                    bush_id=store.bush_id,
-                    chat_id=(
-                        recipient.telegram_id
-                    ),
-                    suffix=(
-                        "opening-deadline-missed"
-                    ),
-                    scheduled_for=queued_at,
-                    message_text=message_text,
-                    payload_json={
-                        "parse_mode": "HTML",
-                        "checkin_id": (
-                            checkin.id
-                        ),
-                        "store_id": store.id,
-                        "store_code": (
-                            store.code
-                        ),
-                        "business_date": (
-                            checkin
-                            .business_date
-                            .isoformat()
-                        ),
-                        "scheduled_open_time": (
-                            checkin
-                            .scheduled_open_time
-                            .strftime("%H:%M")
-                        ),
-                        "control_deadline": (
-                            checkin
-                            .control_deadline
-                            .strftime("%H:%M")
-                        ),
-                        "recipient_role": (
-                            recipient.role.value
-                        ),
-                    },
+        if bush_ids:
+            result = await self.session.execute(
+                select(UserBushBinding.bush_id, User)
+                .join(User, User.id == UserBushBinding.user_id)
+                .where(
+                    UserBushBinding.bush_id.in_(bush_ids),
+                    UserBushBinding.status == BindingStatus.APPROVED,
+                    UserBushBinding.role.in_({
+                        UserRole.BUSH_ADMIN,
+                        UserRole.LION,
+                    }),
+                    User.status == UserStatus.ACTIVE,
+                    User.is_blocked.is_(False),
                 )
+                .order_by(User.role.asc(), User.full_name.asc())
             )
+            for bush_id, user in result.all():
+                recipients_by_bush.setdefault(
+                    int(bush_id),
+                    {},
+                )[user.id] = user
 
-            notifications.append(
-                notification
+        root_result = await self.session.scalars(
+            select(User).where(
+                User.role == UserRole.ROOT_ADMIN,
+                User.status == UserStatus.ACTIVE,
+                User.is_blocked.is_(False),
+            ).order_by(User.id.asc())
+        )
+        root_admins = list(root_result.unique().all())
+
+        recipients_by_store: dict[int, list[User]] = {}
+        for store in stores:
+            recipients = dict(
+                recipients_by_bush.get(store.bush_id, {})
+                if store.bush_id is not None
+                else {}
             )
+            recipients.update({
+                user.id: user
+                for user in root_admins
+            })
+            recipients_by_store[store.id] = list(recipients.values())
 
-            if was_created:
-                created_count += 1
-
-        return notifications, created_count
+        return recipients_by_store
 
     async def get_alert_recipients(
         self,
@@ -1159,13 +1215,49 @@ class OpeningService:
             )
         )
 
-        for bush_id in sorted(
-            target_bush_ids
-        ):
-            bush = await self.session.get(
-                Bush,
-                bush_id,
+        bushes_result = await self.session.scalars(
+            select(Bush)
+            .where(Bush.id.in_(target_bush_ids))
+            .order_by(Bush.id.asc())
+        ) if target_bush_ids else None
+        bushes_by_id = {
+            bush.id: bush
+            for bush in (
+                bushes_result.unique().all()
+                if bushes_result is not None
+                else []
             )
+        }
+
+        summary_data_by_bush = (
+            await self.repositories.openings
+            .get_summary_data_by_bush(
+                business_date=business_date,
+                bush_ids=target_bush_ids,
+            )
+        )
+        summary_store_ids = {
+            record.store_id
+            for data in summary_data_by_bush.values()
+            for key in ("problem_checkins", "waiting_checkins")
+            for record in data[key]
+        }
+        summary_store_map = {
+            store.id: store
+            for store in await self.load_stores(summary_store_ids)
+        }
+        bush_chat_setting_keys = {
+            f"telegram_groups_bush_{bush_id}_chat_id"
+            for bush_id in target_bush_ids
+        }
+        bush_chat_settings = await self.groups.get_int_settings(
+            bush_chat_setting_keys
+        )
+
+        bush_summary_items: list[dict[str, Any]] = []
+
+        for bush_id in sorted(target_bush_ids):
+            bush = bushes_by_id.get(bush_id)
 
             if bush is None:
                 continue
@@ -1174,9 +1266,9 @@ class OpeningService:
                 await self.build_bush_summary(
                     bush=bush,
                     business_date=business_date,
-                    timezone_name=(
-                        resolved_timezone
-                    ),
+                    timezone_name=resolved_timezone,
+                    summary_data=summary_data_by_bush.get(bush_id),
+                    store_map=summary_store_map,
                 )
             )
 
@@ -1184,15 +1276,8 @@ class OpeningService:
                 bush
             )
 
-            bush_group_id = (
-                await self.repositories.settings
-                .get_int(
-                    (
-                        "telegram_groups_bush_"
-                        f"{bush.id}_chat_id"
-                    ),
-                    default=None,
-                )
+            bush_group_id = bush_chat_settings.get(
+                f"telegram_groups_bush_{bush.id}_chat_id"
             )
 
             target_chat_id = (
@@ -1204,25 +1289,23 @@ class OpeningService:
             if target_chat_id is None:
                 continue
 
-            decision = (
-                await self.repositories
-                .daily_summaries
-                .prepare_update(
-                    summary_type=(
-                        bush_summary_type
-                    ),
-                    business_date=(
-                        business_date
-                    ),
-                    chat_id=target_chat_id,
-                    bush_id=bush.id,
-                    topic_id=topic_id,
-                    message_text=message_text,
-                    snapshot_json=snapshot,
+            bush_summary_items.append({
+                "chat_id": target_chat_id,
+                "bush_id": bush.id,
+                "topic_id": topic_id,
+                "message_text": message_text,
+                "snapshot_json": snapshot,
+            })
+
+        if bush_summary_items:
+            decisions.extend(
+                await self.repositories.daily_summaries
+                .prepare_updates_many(
+                    summary_type=bush_summary_type,
+                    business_date=business_date,
+                    items=bush_summary_items,
                 )
             )
-
-            decisions.append(decision)
 
         network_summary_type = (
             self.resolve_summary_type(
@@ -1306,37 +1389,43 @@ class OpeningService:
         bush: Bush,
         business_date: date,
         timezone_name: str,
+        summary_data: dict[str, Any] | None = None,
+        store_map: dict[int, Store] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Формує текст ранкового підсумку куща."""
 
-        statistics = (
-            await self.repositories.openings
-            .get_daily_statistics(
-                business_date=business_date,
-                bush_id=bush.id,
+        if summary_data is None:
+            statistics = (
+                await self.repositories.openings
+                .get_daily_statistics(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        problem_checkins = (
-            await self.repositories.openings
-            .get_problem_records(
-                business_date=business_date,
-                bush_id=bush.id,
+            problem_checkins = (
+                await self.repositories.openings
+                .get_problem_records(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        waiting_checkins = (
-            await self.repositories.openings
-            .get_waiting_for_date(
-                business_date=business_date,
-                bush_id=bush.id,
+            waiting_checkins = (
+                await self.repositories.openings
+                .get_waiting_for_date(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
+        else:
+            statistics = summary_data["statistics"]
+            problem_checkins = summary_data["problem_checkins"]
+            waiting_checkins = summary_data["waiting_checkins"]
 
         problem_lines = (
             await self.build_checkin_lines(
                 problem_checkins,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -1344,6 +1433,7 @@ class OpeningService:
             await self.build_checkin_lines(
                 waiting_checkins,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -1533,21 +1623,23 @@ class OpeningService:
         checkins: list[OpeningCheckin],
         *,
         timezone_name: str,
+        store_map: dict[int, Store] | None = None,
     ) -> list[str]:
         """Формує короткі рядки ТТ для підсумку."""
 
         if not checkins:
             return []
 
-        store_map = {
-            store.id: store
-            for store in await self.load_stores(
-                {
-                    checkin.store_id
-                    for checkin in checkins
-                }
-            )
-        }
+        if store_map is None:
+            store_map = {
+                store.id: store
+                for store in await self.load_stores(
+                    {
+                        checkin.store_id
+                        for checkin in checkins
+                    }
+                )
+            }
 
         timezone = self.get_timezone(
             timezone_name

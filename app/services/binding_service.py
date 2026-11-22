@@ -8,6 +8,7 @@ from html import escape
 from typing import Any, TypeVar
 
 from sqlalchemy import select
+from sqlalchemy.orm import lazyload
 
 from app.database.models.bush import Bush
 from app.database.models.enums import (
@@ -438,6 +439,11 @@ class BindingService:
         change_role: bool = True,
         reason: str | None = None,
         assigned_at: datetime | None = None,
+        _preloaded_store: Store | None = None,
+        _preloaded_user: User | None = None,
+        _preloaded_binding: Any | None = None,
+        _preloaded_binding_loaded: bool = False,
+        _store_access_prevalidated: bool = False,
     ) -> BindingChangeResult:
         """
         Прив’язує користувача до торгової точки.
@@ -450,35 +456,53 @@ class BindingService:
             field_name="assigned_at",
         )
 
-        decision = await self.access.can_manage_store(
-            actor,
-            store_id,
+        store = (
+            _preloaded_store
+            if _preloaded_store is not None
+            else await self.get_store_or_raise(store_id)
         )
+        if store.id != store_id:
+            raise ValueError(
+                "Передана інша торгова точка для прив’язки."
+            )
 
-        decision.raise_if_denied()
+        if not _store_access_prevalidated:
+            decision = await self.access.can_manage_store(
+                actor,
+                store_id,
+                store=store,
+            )
+            decision.raise_if_denied()
 
-        store = await self.get_store_or_raise(
-            store_id
+        target = (
+            _preloaded_user
+            if _preloaded_user is not None
+            else await self.get_user_or_raise(
+                user_id,
+                for_update=True,
+            )
         )
-
-        target = await self.get_user_or_raise(
-            user_id,
-            for_update=True,
-        )
+        if target.id != user_id:
+            raise ValueError(
+                "Передано іншого користувача для прив’язки."
+            )
 
         await self.ensure_can_manage_target(
             actor=actor,
             target=target,
         )
 
-        existing = (
-            await self.get_store_binding(
-                user_id=target.id,
-                store_id=store.id,
-                active_only=False,
-                for_update=True,
+        if _preloaded_binding_loaded:
+            existing = _preloaded_binding
+        else:
+            existing = (
+                await self.get_store_binding(
+                    user_id=target.id,
+                    store_id=store.id,
+                    active_only=False,
+                    for_update=True,
+                )
             )
-        )
 
         previous_values = (
             self.binding_snapshot(existing)
@@ -611,6 +635,11 @@ class BindingService:
         activate_user: bool = True,
         reason: str | None = None,
         assigned_at: datetime | None = None,
+        _preloaded_bush: Bush | None = None,
+        _preloaded_user: User | None = None,
+        _preloaded_binding: Any | None = None,
+        _preloaded_binding_loaded: bool = False,
+        _bush_access_prevalidated: bool = False,
     ) -> BindingChangeResult:
         """
         Прив’язує адміністратора або лева до куща.
@@ -632,37 +661,56 @@ class BindingService:
             field_name="assigned_at",
         )
 
-        decision = await self.access.can_manage_bush(
-            actor,
-            bush_id,
-        )
+        if not _bush_access_prevalidated:
+            decision = await self.access.can_manage_bush(
+                actor,
+                bush_id,
+            )
+            decision.raise_if_denied()
 
-        decision.raise_if_denied()
-
-        bush = await self.get_bush_or_raise(
-            bush_id
+        bush = (
+            _preloaded_bush
+            if _preloaded_bush is not None
+            else await self.get_bush_or_raise(bush_id)
         )
+        if bush.id != bush_id:
+            raise ValueError(
+                "Передано інший кущ для прив’язки."
+            )
 
-        target = await self.get_user_or_raise(
-            user_id,
-            for_update=True,
+        target = (
+            _preloaded_user
+            if _preloaded_user is not None
+            else await self.get_user_or_raise(
+                user_id,
+                for_update=True,
+            )
         )
+        if target.id != user_id:
+            raise ValueError(
+                "Передано іншого користувача для прив’язки."
+            )
 
         await self.ensure_can_assign_bush_role(
             actor=actor,
             target=target,
             role=role,
             bush_id=bush.id,
+            _bush_access_prevalidated=_bush_access_prevalidated,
         )
 
-        existing = (
-            await self.get_bush_binding(
-                user_id=target.id,
-                bush_id=bush.id,
-                active_only=False,
-                for_update=True,
+        if _preloaded_binding_loaded:
+            existing = _preloaded_binding
+        else:
+            existing = (
+                await self.get_bush_binding(
+                    user_id=target.id,
+                    bush_id=bush.id,
+                    role=role,
+                    active_only=False,
+                    for_update=True,
+                )
             )
-        )
 
         previous_values = (
             self.binding_snapshot(existing)
@@ -1743,13 +1791,42 @@ class BindingService:
             actor,
             store_id,
         )
-
         decision.raise_if_denied()
+
+        store = await self.get_store_or_raise(store_id)
+        users_result = await self.session.scalars(
+            select(User)
+            .options(
+                lazyload(User.store_bindings),
+                lazyload(User.bush_bindings),
+            )
+            .where(User.id.in_(normalized_user_ids))
+            .order_by(User.id.asc())
+            .with_for_update(of=User)
+        )
+        users_by_id = {
+            user.id: user
+            for user in users_result.unique().all()
+        }
+        bindings_by_user = (
+            await self.repositories.bindings
+            .get_store_bindings_for_users(
+                user_ids=set(normalized_user_ids),
+                store_id=store_id,
+                for_update=True,
+            )
+        )
 
         items: list[BulkBindingItemResult] = []
 
         for user_id in normalized_user_ids:
             try:
+                target = users_by_id.get(user_id)
+                if target is None:
+                    raise ValueError(
+                        "Користувача не знайдено."
+                    )
+
                 result = await self.assign_store(
                     actor=actor,
                     user_id=user_id,
@@ -1759,6 +1836,11 @@ class BindingService:
                     change_role=True,
                     reason=reason,
                     assigned_at=now,
+                    _preloaded_store=store,
+                    _preloaded_user=target,
+                    _preloaded_binding=bindings_by_user.get(user_id),
+                    _preloaded_binding_loaded=True,
+                    _store_access_prevalidated=True,
                 )
 
                 items.append(
@@ -1819,13 +1901,50 @@ class BindingService:
             actor,
             bush_id,
         )
-
         decision.raise_if_denied()
+
+        bush = await self.get_bush_or_raise(bush_id)
+        users_result = await self.session.scalars(
+            select(User)
+            .options(
+                lazyload(User.store_bindings),
+                lazyload(User.bush_bindings),
+            )
+            .where(User.id.in_(normalized_user_ids))
+            .order_by(User.id.asc())
+            .with_for_update(of=User)
+        )
+        users_by_id = {
+            user.id: user
+            for user in users_result.unique().all()
+        }
+        if role in {
+            UserRole.BUSH_ADMIN,
+            UserRole.LION,
+        }:
+            bindings_by_user = (
+                await self.repositories.bindings
+                .get_bush_bindings_for_users(
+                    user_ids=set(normalized_user_ids),
+                    bush_id=bush_id,
+                    role=role,
+                    for_update=True,
+                )
+            )
+        else:
+            # Let each item keep the existing unsupported-role error result.
+            bindings_by_user = {}
 
         items: list[BulkBindingItemResult] = []
 
         for user_id in normalized_user_ids:
             try:
+                target = users_by_id.get(user_id)
+                if target is None:
+                    raise ValueError(
+                        "Користувача не знайдено."
+                    )
+
                 result = await self.assign_bush(
                     actor=actor,
                     user_id=user_id,
@@ -1834,6 +1953,11 @@ class BindingService:
                     activate_user=True,
                     reason=reason,
                     assigned_at=now,
+                    _preloaded_bush=bush,
+                    _preloaded_user=target,
+                    _preloaded_binding=bindings_by_user.get(user_id),
+                    _preloaded_binding_loaded=True,
+                    _bush_access_prevalidated=True,
                 )
 
                 items.append(
@@ -1975,6 +2099,7 @@ class BindingService:
         *,
         user_id: int,
         bush_id: int,
+        role: UserRole | None = None,
         active_only: bool,
         for_update: bool,
     ) -> Any | None:
@@ -1991,6 +2116,7 @@ class BindingService:
             ),
             user_id=user_id,
             bush_id=bush_id,
+            role=role,
             active_only=active_only,
             for_update=for_update,
         )
@@ -2107,6 +2233,7 @@ class BindingService:
         target: User,
         role: UserRole,
         bush_id: int,
+        _bush_access_prevalidated: bool = False,
     ) -> None:
         if role == UserRole.BUSH_ADMIN:
             if actor.role not in {
@@ -2123,14 +2250,14 @@ class BindingService:
                 pass
 
             elif actor.role == UserRole.BUSH_ADMIN:
-                decision = (
-                    await self.access.can_manage_bush(
-                        actor,
-                        bush_id,
+                if not _bush_access_prevalidated:
+                    decision = (
+                        await self.access.can_manage_bush(
+                            actor,
+                            bush_id,
+                        )
                     )
-                )
-
-                decision.raise_if_denied()
+                    decision.raise_if_denied()
 
             else:
                 raise AccessDeniedError(

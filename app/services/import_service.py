@@ -1677,6 +1677,34 @@ class ImportService:
             if row.is_actionable
         ]
 
+        has_imported_schedule = any(
+            any(
+                value is not None
+                for value in (
+                    row.weekday_opening,
+                    row.weekday_closing,
+                    row.saturday_opening,
+                    row.saturday_closing,
+                    row.sunday_opening,
+                    row.sunday_closing,
+                )
+            )
+            for row in actionable_rows
+        )
+        schedule_deadline_minutes = None
+        if has_imported_schedule:
+            try:
+                schedule_deadline_minutes = (
+                    await self.repositories.settings
+                    .get_opening_deadline_minutes(),
+                    await self.repositories.settings
+                    .get_closing_deadline_minutes(),
+                )
+            except Exception:
+                # Keep the established per-row failure/partial-import behavior
+                # if shared setting preload fails; each row retries as before.
+                schedule_deadline_minutes = None
+
         for row in actionable_rows:
             try:
                 async with self.session.begin_nested():
@@ -1689,6 +1717,9 @@ class ImportService:
                             ),
                             changed_at=(
                                 imported_at
+                            ),
+                            schedule_deadline_minutes=(
+                                schedule_deadline_minutes
                             ),
                         )
                     )
@@ -1798,6 +1829,7 @@ class ImportService:
         row: StoreImportRow,
         reason: str,
         changed_at: datetime,
+        schedule_deadline_minutes: tuple[int, int] | None = None,
     ) -> ImportApplyItemResult:
         """
         Записує один рядок.
@@ -1867,6 +1899,7 @@ class ImportService:
                 store_id=create_result.store.id,
                 row=row,
                 reason=reason,
+                schedule_deadline_minutes=schedule_deadline_minutes,
             )
 
             return ImportApplyItemResult(
@@ -2013,6 +2046,7 @@ class ImportService:
             store_id=store.id,
             row=row,
             reason=reason,
+            schedule_deadline_minutes=schedule_deadline_minutes,
         )
 
         return ImportApplyItemResult(
@@ -3279,6 +3313,7 @@ class ImportService:
         store_id: int,
         row: StoreImportRow,
         reason: str,
+        schedule_deadline_minutes: tuple[int, int] | None = None,
     ) -> None:
         groups = (
             (
@@ -3307,15 +3342,22 @@ class ImportService:
         if not has_schedule:
             return
 
-        opening_deadline_minutes = (
-            await self.repositories.settings
-            .get_opening_deadline_minutes()
-        )
+        if schedule_deadline_minutes is None:
+            opening_deadline_minutes = (
+                await self.repositories.settings
+                .get_opening_deadline_minutes()
+            )
+            closing_deadline_minutes = (
+                await self.repositories.settings
+                .get_closing_deadline_minutes()
+            )
+        else:
+            (
+                opening_deadline_minutes,
+                closing_deadline_minutes,
+            ) = schedule_deadline_minutes
 
-        closing_deadline_minutes = (
-            await self.repositories.settings
-            .get_closing_deadline_minutes()
-        )
+        schedule_items: list[dict[str, Any]] = []
 
         for (
             weekdays,
@@ -3352,21 +3394,22 @@ class ImportService:
             )
 
             for weekday in weekdays:
-                await self.schedules.set_store_weekday(
-                    actor=actor,
-                    store_id=store_id,
-                    weekday=weekday,
-                    is_working_day=True,
-                    opening_time=opening,
-                    opening_control_deadline=(
-                        opening_deadline
-                    ),
-                    closing_time=closing,
-                    closing_control_deadline=(
-                        closing_deadline
-                    ),
-                    reason=reason,
-                )
+                schedule_items.append({
+                    "weekday": weekday,
+                    "is_working_day": True,
+                    "opening_time": opening,
+                    "opening_control_deadline": opening_deadline,
+                    "closing_time": closing,
+                    "closing_control_deadline": closing_deadline,
+                })
+
+        if schedule_items:
+            await self.schedules.set_store_weekdays(
+                actor=actor,
+                store_id=store_id,
+                items=schedule_items,
+                reason=reason,
+            )
 
     @staticmethod
     def add_minutes_to_time(

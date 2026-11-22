@@ -37,6 +37,8 @@ from app.repositories import (
 from app.services.access import AccessService
 from app.services.group_service import (
     GroupService,
+    TelegramDestination,
+    TelegramGroupScope,
     TelegramGroupTopic,
 )
 from app.utils.datetime import closing_business_date
@@ -1303,6 +1305,16 @@ class ClosingService:
             )
         )
 
+        missed_store_ids = {
+            report.store_id
+            for report in missed_reports
+        }
+        missed_stores = await self.load_stores(missed_store_ids)
+        missed_stores_by_id = {
+            store.id: store
+            for store in missed_stores
+        }
+
         notifications: list[
             NotificationLog
         ] = []
@@ -1319,45 +1331,63 @@ class ClosingService:
             )
         )
 
+        recipients_by_store: dict[int, list[User]] = {}
+        if (
+            create_notifications
+            and notifications_enabled
+            and missed_stores
+        ):
+            recipients_by_store = (
+                await self.get_alert_recipients_for_stores(
+                    missed_stores
+                )
+            )
+
         if (
             create_notifications
             and notifications_enabled
         ):
+            notification_items: list[dict[str, Any]] = []
             for report in missed_reports:
-                store = (
-                    await self.access
-                    .get_store_or_raise(
+                store = missed_stores_by_id.get(report.store_id)
+                if store is None:
+                    store = await self.access.get_store_or_raise(
                         report.store_id
                     )
-                )
 
-                queued, created_count = (
-                    await self
-                    .queue_missed_notifications(
+                recipients = recipients_by_store.get(store.id)
+                if recipients is None:
+                    recipients = await self.get_alert_recipients(store)
+
+                notification_items.extend(
+                    self.build_missed_notification_items(
                         store=store,
                         report=report,
+                        recipients=recipients,
                         queued_at=current_time,
                     )
                 )
 
-                notifications.extend(queued)
-
-                created_notifications += (
-                    created_count
+            if notification_items:
+                (
+                    notifications,
+                    created_notifications,
+                ) = (
+                    await self.repositories.notifications
+                    .get_or_create_many_from_parts(
+                        notification_items
+                    )
                 )
-
-                existing_notifications += (
-                    len(queued)
-                    - created_count
+                existing_notifications = (
+                    len(notifications) - created_notifications
                 )
 
         for report in missed_reports:
-            store = (
-                await self.access
-                .get_store_or_raise(
+            store = missed_stores_by_id.get(report.store_id)
+            if store is None:
+                store = await self.access.get_store_or_raise(
                     report.store_id
                 )
-            )
 
             await self.log_missed_deadline(
                 store=store,
@@ -1372,16 +1402,9 @@ class ClosingService:
             missed_reports
             and update_summaries
         ):
-            stores = await self.load_stores(
-                {
-                    report.store_id
-                    for report in missed_reports
-                }
-            )
-
             bush_ids = {
                 store.bush_id
-                for store in stores
+                for store in missed_stores
                 if store.bush_id is not None
             }
 
@@ -1416,116 +1439,144 @@ class ClosingService:
     # СПОВІЩЕННЯ ПРО НЕПОДАНИЙ ЗВІТ
     # ==========================================
 
+    def build_missed_notification_items(
+        self,
+        *,
+        store: Store,
+        report: ClosingReport,
+        recipients: list[User] | None,
+        queued_at: datetime,
+    ) -> list[dict[str, Any]]:
+        """Build deduplicated notification payloads without database I/O."""
+        if not recipients:
+            return []
+
+        notification_type = self.resolve_notification_type(
+            "closing_missed",
+            "closing_deadline_missed",
+            "closing_alert",
+            "report_not_submitted",
+        )
+        message_text = self.build_missed_notification_text(
+            store=store,
+            report=report,
+        )
+
+        items: list[dict[str, Any]] = []
+        for recipient in recipients:
+            if recipient.telegram_id is None:
+                continue
+            items.append({
+                "notification_type": notification_type,
+                "business_date": report.business_date,
+                "recipient_user_id": recipient.id,
+                "store_id": store.id,
+                "bush_id": store.bush_id,
+                "chat_id": recipient.telegram_id,
+                "suffix": "closing-deadline-missed",
+                "scheduled_for": queued_at,
+                "message_text": message_text,
+                "payload_json": {
+                    "report_id": report.id,
+                    "store_id": store.id,
+                    "store_code": self.store_display_name(store),
+                    "business_date": report.business_date.isoformat(),
+                    "scheduled_close_time": report.scheduled_close_time.strftime("%H:%M"),
+                    "control_deadline": report.control_deadline.strftime("%H:%M"),
+                    "recipient_role": recipient.role.value,
+                    "parse_mode": "HTML",
+                },
+            })
+        return items
+
     async def queue_missed_notifications(
         self,
         *,
         store: Store,
         report: ClosingReport,
         queued_at: datetime,
+        recipients: list[User] | None = None,
     ) -> tuple[list[NotificationLog], int]:
-        """
-        Створює повідомлення для:
+        """Create missed-closing notifications for one store."""
+        if recipients is None:
+            recipients = await self.get_alert_recipients(store)
 
-        - працівників ТТ;
-        - адміністратора куща;
-        - левів;
-        - директорів;
-        - ROOT_ADMIN.
-        """
-
-        recipients = await self.get_alert_recipients(
-            store
+        items = self.build_missed_notification_items(
+            store=store,
+            report=report,
+            recipients=recipients,
+            queued_at=queued_at,
         )
-
-        if not recipients:
+        if not items:
             return [], 0
 
-        notification_type = (
-            self.resolve_notification_type(
-                "closing_missed",
-                "closing_deadline_missed",
-                "closing_alert",
-                "report_not_submitted",
-            )
+        return await self.repositories.notifications.get_or_create_many_from_parts(
+            items
         )
 
-        message_text = (
-            self.build_missed_notification_text(
-                store=store,
-                report=report,
-            )
-        )
+    async def get_alert_recipients_for_stores(
+        self,
+        stores: list[Store],
+    ) -> dict[int, list[User]]:
+        """Load bush recipients and root admins once for a store batch."""
+        if not stores:
+            return {}
 
-        notifications: list[
-            NotificationLog
-        ] = []
+        from app.database.models.binding import UserBushBinding
+        from app.database.models.enums import BindingStatus
 
-        created_count = 0
+        bush_ids = {
+            store.bush_id
+            for store in stores
+            if store.bush_id is not None
+        }
+        recipients_by_bush: dict[int, dict[int, User]] = {}
 
-        for recipient in recipients:
-            if recipient.telegram_id is None:
-                continue
-
-            notification, was_created = (
-                await self.repositories.notifications
-                .get_or_create_from_parts(
-                    notification_type=(
-                        notification_type
-                    ),
-                    business_date=(
-                        report.business_date
-                    ),
-                    recipient_user_id=(
-                        recipient.id
-                    ),
-                    store_id=store.id,
-                    bush_id=store.bush_id,
-                    chat_id=(
-                        recipient.telegram_id
-                    ),
-                    suffix=(
-                        "closing-deadline-missed"
-                    ),
-                    scheduled_for=queued_at,
-                    message_text=message_text,
-                    payload_json={
-                        "report_id": report.id,
-                        "store_id": store.id,
-                        "store_code": (
-                            self.store_display_name(
-                                store
-                            )
-                        ),
-                        "business_date": (
-                            report.business_date
-                            .isoformat()
-                        ),
-                        "scheduled_close_time": (
-                            report
-                            .scheduled_close_time
-                            .strftime("%H:%M")
-                        ),
-                        "control_deadline": (
-                            report
-                            .control_deadline
-                            .strftime("%H:%M")
-                        ),
-                        "recipient_role": (
-                            recipient.role.value
-                        ),
-                        "parse_mode": "HTML",
-                    },
+        if bush_ids:
+            result = await self.session.execute(
+                select(UserBushBinding.bush_id, User)
+                .join(User, User.id == UserBushBinding.user_id)
+                .where(
+                    UserBushBinding.bush_id.in_(bush_ids),
+                    UserBushBinding.status == BindingStatus.APPROVED,
+                    UserBushBinding.role.in_({
+                        UserRole.BUSH_ADMIN,
+                        UserRole.LION,
+                    }),
+                    User.status == UserStatus.ACTIVE,
+                    User.is_blocked.is_(False),
                 )
+                .order_by(User.role.asc(), User.full_name.asc())
             )
+            for bush_id, user in result.all():
+                recipients_by_bush.setdefault(
+                    int(bush_id),
+                    {},
+                )[user.id] = user
 
-            notifications.append(
-                notification
+        root_result = await self.session.scalars(
+            select(User).where(
+                User.role == UserRole.ROOT_ADMIN,
+                User.status == UserStatus.ACTIVE,
+                User.is_blocked.is_(False),
+            ).order_by(User.id.asc())
+        )
+        root_admins = list(root_result.unique().all())
+
+        recipients_by_store: dict[int, list[User]] = {}
+        for store in stores:
+            recipients = dict(
+                recipients_by_bush.get(store.bush_id, {})
+                if store.bush_id is not None
+                else {}
             )
+            recipients.update({
+                user.id: user
+                for user in root_admins
+            })
+            recipients_by_store[store.id] = list(recipients.values())
 
-            if was_created:
-                created_count += 1
-
-        return notifications, created_count
+        return recipients_by_store
 
     async def get_alert_recipients(
         self,
@@ -1671,20 +1722,67 @@ class ClosingService:
             )
         )
 
-        for bush_id in sorted(
-            target_bush_ids
-        ):
+        bushes_result = await self.session.scalars(
+            select(Bush)
+            .options(
+                lazyload(Bush.stores),
+                lazyload(Bush.user_bindings),
+            )
+            .where(Bush.id.in_(target_bush_ids))
+            .order_by(Bush.id.asc())
+        ) if target_bush_ids else None
+        bushes_by_id = {
+            bush.id: bush
+            for bush in (
+                bushes_result.unique().all()
+                if bushes_result is not None
+                else []
+            )
+        }
+
+        summary_data_by_bush = (
+            await self.repositories.closings
+            .get_summary_data_by_bush(
+                business_date=business_date,
+                bush_ids=target_bush_ids,
+            )
+        )
+        summary_store_ids = {
+            report.store_id
+            for data in summary_data_by_bush.values()
+            for key in ("problem_reports", "waiting_reports")
+            for report in data[key]
+        }
+        summary_store_map = {
+            store.id: store
+            for store in await self.load_stores(summary_store_ids)
+        }
+        bush_chat_keys = {
+            self.groups.chat_id_key(
+                scope=TelegramGroupScope.BUSH,
+                bush_id=bush_id,
+            )
+            for bush_id in target_bush_ids
+        }
+        bush_topic_keys = {
+            self.groups.thread_key(
+                scope=TelegramGroupScope.BUSH,
+                bush_id=bush_id,
+                topic=TelegramGroupTopic.SUMMARIES,
+            )
+            for bush_id in target_bush_ids
+        }
+        bush_group_settings = await self.groups.get_int_settings(
+            bush_chat_keys | bush_topic_keys
+        )
+        bush_summary_items: list[dict[str, Any]] = []
+        bush_summary_context: list[tuple[int, str]] = []
+
+        for bush_id in sorted(target_bush_ids):
             bush = None
 
             try:
-                bush = await self.session.get(
-                    Bush,
-                    bush_id,
-                    options=(
-                        lazyload(Bush.stores),
-                        lazyload(Bush.user_bindings),
-                    ),
-                )
+                bush = bushes_by_id.get(bush_id)
 
                 if bush is None:
                     preparation_errors.append(
@@ -1693,16 +1791,28 @@ class ClosingService:
                     )
                     continue
 
+                chat_key = self.groups.chat_id_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                )
+                thread_key = self.groups.thread_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                    topic=TelegramGroupTopic.SUMMARIES,
+                )
+                bush_chat_id = bush_group_settings.get(chat_key)
+                bush_thread_id = bush_group_settings.get(thread_key)
                 bush_destination = (
-                    await self.groups
-                    .resolve_destination(
-                        topic=(
-                            TelegramGroupTopic
-                            .SUMMARIES
-                        ),
+                    TelegramDestination(
+                        chat_id=bush_chat_id,
+                        message_thread_id=bush_thread_id,
+                        scope=TelegramGroupScope.BUSH,
+                        topic=TelegramGroupTopic.SUMMARIES,
                         bush_id=bush.id,
-                        fallback_to_network=False,
+                        title=None,
                     )
+                    if bush_chat_id is not None
+                    else None
                 )
 
                 if bush_destination is None:
@@ -1721,9 +1831,9 @@ class ClosingService:
                     await self.build_bush_summary(
                         bush=bush,
                         business_date=business_date,
-                        timezone_name=(
-                            resolved_timezone
-                        ),
+                        timezone_name=resolved_timezone,
+                        summary_data=summary_data_by_bush.get(bush_id),
+                        store_map=summary_store_map,
                     )
                 )
 
@@ -1736,29 +1846,17 @@ class ClosingService:
                     )
                 )
 
-                decision = (
-                    await self.repositories
-                    .daily_summaries
-                    .prepare_update(
-                        summary_type=(
-                            bush_summary_type
-                        ),
-                        business_date=(
-                            business_date
-                        ),
-                        chat_id=(
-                            bush_destination.chat_id
-                        ),
-                        bush_id=bush.id,
-                        topic_id=topic_id,
-                        message_text=message_text,
-                        snapshot_json=snapshot,
-                    )
-                )
-
-                decisions.append(
-                    decision
-                )
+                bush_summary_items.append({
+                    "chat_id": bush_destination.chat_id,
+                    "bush_id": bush.id,
+                    "topic_id": topic_id,
+                    "message_text": message_text,
+                    "snapshot_json": snapshot,
+                })
+                bush_summary_context.append((
+                    bush.id,
+                    str(getattr(bush, "name", f"Кущ #{bush.id}")),
+                ))
 
             except Exception as error:
                 if bush is not None:
@@ -1781,6 +1879,45 @@ class ClosingService:
                         f"{error}"
                     )[:300]
                 )
+
+        if bush_summary_items:
+            try:
+                decisions.extend(
+                    await self.repositories.daily_summaries
+                    .prepare_updates_many(
+                        summary_type=bush_summary_type,
+                        business_date=business_date,
+                        items=bush_summary_items,
+                    )
+                )
+            except Exception:
+                # Keep the old per-bush failure isolation if the batch write fails.
+                for item, (bush_id, bush_name) in zip(
+                    bush_summary_items,
+                    bush_summary_context,
+                    strict=True,
+                ):
+                    try:
+                        decisions.append(
+                            await self.repositories.daily_summaries
+                            .prepare_update(
+                                summary_type=bush_summary_type,
+                                business_date=business_date,
+                                chat_id=item["chat_id"],
+                                bush_id=item["bush_id"],
+                                topic_id=item["topic_id"],
+                                message_text=item["message_text"],
+                                snapshot_json=item["snapshot_json"],
+                            )
+                        )
+                    except Exception as error:
+                        preparation_errors.append(
+                            (
+                                f"{bush_name}: "
+                                f"{type(error).__name__}: "
+                                f"{error}"
+                            )[:300]
+                        )
 
         if not include_network:
             return decisions
@@ -1897,37 +2034,43 @@ class ClosingService:
         bush: Bush,
         business_date: date,
         timezone_name: str,
+        summary_data: dict[str, Any] | None = None,
+        store_map: dict[int, Store] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Формує вечірній підсумок куща."""
 
-        statistics = (
-            await self.repositories.closings
-            .get_daily_statistics(
-                business_date=business_date,
-                bush_id=bush.id,
+        if summary_data is None:
+            statistics = (
+                await self.repositories.closings
+                .get_daily_statistics(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        problem_reports = (
-            await self.repositories.closings
-            .get_problem_reports(
-                business_date=business_date,
-                bush_id=bush.id,
+            problem_reports = (
+                await self.repositories.closings
+                .get_problem_reports(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        waiting_reports = (
-            await self.repositories.closings
-            .get_waiting_for_date(
-                business_date=business_date,
-                bush_id=bush.id,
+            waiting_reports = (
+                await self.repositories.closings
+                .get_waiting_for_date(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
+        else:
+            statistics = summary_data["statistics"]
+            problem_reports = summary_data["problem_reports"]
+            waiting_reports = summary_data["waiting_reports"]
 
         problem_lines = (
             await self.build_report_lines(
                 problem_reports,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -1935,6 +2078,7 @@ class ClosingService:
             await self.build_report_lines(
                 waiting_reports,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -2074,6 +2218,31 @@ class ClosingService:
             result.unique().all()
         )
 
+        statistics_by_bush = (
+            await self.repositories.closings
+            .get_daily_statistics_by_bush(
+                business_date=business_date,
+            )
+        )
+        setting_keys: set[str] = set()
+        for bush in bushes:
+            setting_keys.add(
+                self.groups.chat_id_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                )
+            )
+            setting_keys.add(
+                self.groups.thread_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                    topic=TelegramGroupTopic.SUMMARIES,
+                )
+            )
+        group_settings = await self.groups.get_int_settings(
+            setting_keys
+        )
+
         lines = [
             (
                 "🌿 <b>Підрахунок по кущах "
@@ -2095,15 +2264,14 @@ class ClosingService:
             )
 
             try:
-                stats = (
-                    await self.repositories
-                    .closings
-                    .get_daily_statistics(
-                        business_date=(
-                            business_date
-                        ),
-                        bush_id=bush.id,
-                    )
+                stats = statistics_by_bush.get(
+                    bush.id,
+                    {
+                        "expected_count": 0,
+                        "submitted_count": 0,
+                        "waiting_count": 0,
+                        "missed_count": 0,
+                    },
                 )
 
                 expected = int(
@@ -2137,30 +2305,23 @@ class ClosingService:
 
                 issues: list[str] = []
 
-                bush_chat_id = (
-                    await self.groups.get_int_setting(
-                        self.groups.chat_id_key(
-                            scope=TelegramGroupScope.BUSH,
-                            bush_id=bush.id,
-                        )
-                    )
+                bush_chat_id_key = self.groups.chat_id_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
                 )
-
-                bush_summary_thread_id = None
-
-                if bush_chat_id is not None:
-                    bush_summary_thread_id = (
-                        await self.groups.get_int_setting(
-                            self.groups.thread_key(
-                                scope=TelegramGroupScope.BUSH,
-                                bush_id=bush.id,
-                                topic=(
-                                    TelegramGroupTopic
-                                    .SUMMARIES
-                                ),
-                            )
-                        )
-                    )
+                bush_thread_key = self.groups.thread_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                    topic=TelegramGroupTopic.SUMMARIES,
+                )
+                bush_chat_id = group_settings.get(
+                    bush_chat_id_key
+                )
+                bush_summary_thread_id = (
+                    group_settings.get(bush_thread_key)
+                    if bush_chat_id is not None
+                    else None
+                )
 
                 if expected == 0:
                     issues.append(
@@ -2541,23 +2702,24 @@ class ClosingService:
         reports: list[ClosingReport],
         *,
         timezone_name: str,
+        store_map: dict[int, Store] | None = None,
     ) -> list[str]:
         """Формує короткі рядки звітів."""
 
         if not reports:
             return []
 
-        stores = await self.load_stores(
-            {
-                report.store_id
-                for report in reports
+        if store_map is None:
+            stores = await self.load_stores(
+                {
+                    report.store_id
+                    for report in reports
+                }
+            )
+            store_map = {
+                store.id: store
+                for store in stores
             }
-        )
-
-        store_map = {
-            store.id: store
-            for store in stores
-        }
 
         timezone = self.get_timezone(
             timezone_name

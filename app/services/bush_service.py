@@ -9,11 +9,14 @@ from typing import Any, TypeVar
 
 from sqlalchemy import func, select
 
+from app.database.models.binding import UserBushBinding
 from app.database.models.bush import Bush
 from app.database.models.enums import (
     AuditAction,
+    BindingStatus,
     EntityType,
     UserRole,
+    UserStatus,
 )
 from app.database.models.store import Store
 from app.database.models.user import User
@@ -321,10 +324,7 @@ class BushService:
             result.unique().all()
         )
 
-        return [
-            await self.build_bush_view(bush)
-            for bush in bushes
-        ]
+        return await self.build_bush_views(bushes)
 
     # ==========================================
     # ПОШУК КУЩІВ
@@ -430,11 +430,7 @@ class BushService:
             statement
         )
 
-        return [
-            await self.build_bush_view(bush)
-            for bush
-            in result.unique().all()
-        ]
+        return await self.build_bush_views(list(result.unique().all()))
 
     # ==========================================
     # СТВОРЕННЯ
@@ -1520,25 +1516,59 @@ class BushService:
             BushBulkItemResult
         ] = []
 
-        for data in bushes:
+        normalized_inputs: dict[int, tuple[str, str | None]] = {}
+        for index, data in enumerate(bushes):
             try:
-                normalized_name = (
+                normalized_inputs[index] = (
                     self.normalize_required_text(
                         data.name,
                         field_name="Назва куща",
                         max_length=255,
-                    )
+                    ),
+                    self.normalize_optional_code(data.code),
                 )
+            except Exception:
+                # Preserve item-level validation errors in the main loop.
+                continue
 
-                normalized_code = (
-                    self.normalize_optional_code(
-                        data.code
+        existing_bushes = await self.find_bushes_matching(
+            names={
+                name.lower()
+                for name, _ in normalized_inputs.values()
+            },
+            codes={
+                code.lower()
+                for _, code in normalized_inputs.values()
+                if code is not None
+            },
+        )
+
+        for index, data in enumerate(bushes):
+            try:
+                normalized = normalized_inputs.get(index)
+                if normalized is None:
+                    normalized_name = self.normalize_required_text(
+                        data.name,
+                        field_name="Назва куща",
+                        max_length=255,
                     )
-                )
+                    normalized_code = self.normalize_optional_code(data.code)
+                else:
+                    normalized_name, normalized_code = normalized
 
-                existing = await self.find_bush(
-                    name=normalized_name,
-                    code=normalized_code,
+                existing = next(
+                    (
+                        bush
+                        for bush in existing_bushes
+                        if (
+                            normalized_code is not None
+                            and str(getattr(bush, "code", "") or "").lower()
+                            == normalized_code.lower()
+                        )
+                        or str(getattr(bush, "name", "") or "").lower()
+                        == normalized_name.lower()
+                    ),
+                    None,
                 )
 
                 if existing is None:
@@ -1552,6 +1582,8 @@ class BushService:
                         is_active=data.is_active,
                         reason=normalized_reason,
                     )
+
+                    existing_bushes.append(result.bush)
 
                     items.append(
                         BushBulkItemResult(
@@ -1691,6 +1723,47 @@ class BushService:
     # ПОШУК МОДЕЛІ КУЩА
     # ==========================================
 
+    async def find_bushes_matching(
+        self,
+        *,
+        names: set[str],
+        codes: set[str],
+    ) -> list[Bush]:
+        """Loads existing bushes matching a set of names/codes in one query."""
+        from sqlalchemy import or_
+
+        conditions: list[Any] = []
+        name_column = self.model_column("name", "title")
+        code_column = self.model_column("code", "slug")
+
+        normalized_names = {
+            str(name).strip().lower()
+            for name in names
+            if name and str(name).strip()
+        }
+        normalized_codes = {
+            str(code).strip().lower()
+            for code in codes
+            if code and str(code).strip()
+        }
+        if normalized_names and name_column is not None:
+            conditions.append(
+                func.lower(name_column).in_(normalized_names)
+            )
+        if normalized_codes and code_column is not None:
+            conditions.append(
+                func.lower(code_column).in_(normalized_codes)
+            )
+        if not conditions:
+            return []
+
+        result = await self.session.scalars(
+            select(Bush)
+            .where(or_(*conditions))
+            .order_by(Bush.id.asc())
+        )
+        return list(result.unique().all())
+
     async def find_bush(
         self,
         *,
@@ -1777,6 +1850,85 @@ class BushService:
     # ==========================================
     # BUSH VIEW
     # ==========================================
+
+    async def build_bush_views(
+        self,
+        bushes: list[Bush],
+    ) -> list[BushView]:
+        """Build bush views with batched store and binding statistics."""
+        if not bushes:
+            return []
+
+        bush_ids = {bush.id for bush in bushes}
+        store_result = await self.session.scalars(
+            select(Store).where(Store.bush_id.in_(bush_ids))
+        )
+        stores_by_bush: dict[int, list[Store]] = {}
+        for store in store_result.unique().all():
+            if store.bush_id is not None:
+                stores_by_bush.setdefault(int(store.bush_id), []).append(store)
+
+        binding_result = await self.session.execute(
+            select(
+                UserBushBinding.bush_id,
+                UserBushBinding.role,
+                func.count(UserBushBinding.id),
+            )
+            .join(User, User.id == UserBushBinding.user_id)
+            .where(
+                UserBushBinding.bush_id.in_(bush_ids),
+                UserBushBinding.status == BindingStatus.APPROVED,
+                UserBushBinding.role.in_({
+                    UserRole.BUSH_ADMIN,
+                    UserRole.LION,
+                }),
+                User.status == UserStatus.ACTIVE,
+                User.is_blocked.is_(False),
+            )
+            .group_by(
+                UserBushBinding.bush_id,
+                UserBushBinding.role,
+            )
+        )
+        user_counts: dict[int, dict[UserRole, int]] = {}
+        for bush_id, role, count in binding_result.all():
+            user_counts.setdefault(int(bush_id), {})[role] = int(count or 0)
+
+        views: list[BushView] = []
+        for bush in bushes:
+            stores = stores_by_bush.get(bush.id, [])
+            active_stores = [
+                store
+                for store in stores
+                if bool(getattr(store, "is_active", True))
+            ]
+            cities = sorted({
+                city
+                for store in stores
+                if (
+                    city := self.get_text_attribute(store, "city")
+                )
+            })
+            counts = user_counts.get(bush.id, {})
+
+            views.append(
+                BushView(
+                    id=bush.id,
+                    name=self.bush_name(bush),
+                    code=self.get_text_attribute(bush, "code", "slug"),
+                    description=self.get_text_attribute(bush, "description"),
+                    is_active=bool(getattr(bush, "is_active", True)),
+                    active_store_count=len(active_stores),
+                    total_store_count=len(stores),
+                    bush_admin_count=counts.get(UserRole.BUSH_ADMIN, 0),
+                    lion_count=counts.get(UserRole.LION, 0),
+                    created_at=getattr(bush, "created_at", None),
+                    updated_at=getattr(bush, "updated_at", None),
+                    raw_bush=bush,
+                )
+            )
+
+        return views
 
     async def build_bush_view(
         self,

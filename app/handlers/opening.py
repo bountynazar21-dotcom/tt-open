@@ -704,13 +704,36 @@ async def build_store_choices(
         tuple[int, str]
     ] = []
 
-    for store_id in sorted(
-        store_ids
-    ):
-        store = await load_store(
-            store_id=store_id,
-            data=data,
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
+    stores_by_id: dict[int, Any] = {}
+
+    if session is not None and store_ids:
+        from sqlalchemy import select
+        from app.database.models.store import Store
+
+        query_result = await session.scalars(
+            select(Store).where(Store.id.in_(store_ids))
         )
+        stores_by_id = {
+            int(store.id): store
+            for store in query_result.unique().all()
+        }
+
+    for store_id in sorted(store_ids):
+        store = stores_by_id.get(store_id)
+        if store is None and session is None:
+            store = await load_store(
+                store_id=store_id,
+                data=data,
+            )
+
+        if store is None:
+            continue
 
         result.append(
             (

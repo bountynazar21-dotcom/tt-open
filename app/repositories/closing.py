@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import (
     func,
     select,
+    tuple_,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -336,38 +337,62 @@ class ClosingRepository(
         self,
         plans: Iterable[ClosingPlan],
     ) -> list[ClosingReport]:
-        """
-        Створює відсутні вечірні записи.
-
-        Уже створені звіти не змінюються.
-        """
-
-        created_reports: list[
-            ClosingReport
-        ] = []
-
-        unique_plans: dict[
-            tuple[int, date],
-            ClosingPlan,
-        ] = {}
-
+        """Create missing closing rows with one read across all dates/stores."""
+        plans_by_key: dict[tuple[date, int], ClosingPlan] = {}
         for plan in plans:
-            unique_plans[
-                (
-                    plan.store_id,
-                    plan.business_date,
-                )
-            ] = plan
+            plans_by_key[(plan.business_date, plan.store_id)] = plan
 
-        for plan in unique_plans.values():
-            report, was_created = (
-                await self.create_from_plan(plan)
+        if not plans_by_key:
+            return []
+
+        existing_result = await self.session.execute(
+            select(
+                ClosingReport.business_date,
+                ClosingReport.store_id,
+            ).where(
+                tuple_(
+                    ClosingReport.business_date,
+                    ClosingReport.store_id,
+                ).in_(list(plans_by_key))
             )
+        )
+        existing_keys = {
+            (business_date, int(store_id))
+            for business_date, store_id in existing_result.all()
+        }
 
-            if was_created:
-                created_reports.append(report)
+        missing_plans = [
+            plan
+            for key, plan in plans_by_key.items()
+            if key not in existing_keys
+        ]
+        if not missing_plans:
+            return []
 
-        return created_reports
+        new_records = [
+            ClosingReport.create_waiting(
+                store_id=plan.store_id,
+                business_date=plan.business_date,
+                scheduled_close_time=plan.scheduled_close_time,
+                control_deadline=plan.control_deadline,
+            )
+            for plan in missing_plans
+        ]
+
+        try:
+            async with self.session.begin_nested():
+                self.session.add_all(new_records)
+                await self.session.flush()
+            return new_records
+        except IntegrityError:
+            # A concurrent scheduler may win the unique constraint.
+            # Retry only the rare race path with the safe get-or-create operation.
+            created_reports: list[ClosingReport] = []
+            for plan in missing_plans:
+                report, was_created = await self.create_from_plan(plan)
+                if was_created:
+                    created_reports.append(report)
+            return created_reports
 
     # ==========================================
     # ФОТО ЧЕКА
@@ -1584,6 +1609,103 @@ class ClosingRepository(
     # СТАТИСТИКА
     # ==========================================
 
+
+    async def get_summary_data_by_bush(
+        self,
+        *,
+        business_date: date,
+        bush_ids: set[int],
+    ) -> dict[int, dict[str, Any]]:
+        """Loads all bush closing summary rows and statistics in one query."""
+        if not bush_ids:
+            return {}
+
+        grouped: dict[int, dict[str, Any]] = {
+            bush_id: {
+                "counts": {status: 0 for status in ClosingStatus},
+                "problem_reports": [],
+                "waiting_reports": [],
+                "cash_values": [],
+            }
+            for bush_id in bush_ids
+        }
+        statement = (
+            select(ClosingReport, Store.bush_id)
+            .join(Store, Store.id == ClosingReport.store_id)
+            .where(
+                ClosingReport.business_date == business_date,
+                Store.bush_id.in_(bush_ids),
+            )
+            .order_by(Store.store_number.asc())
+        )
+        result = await self.session.execute(statement)
+
+        for report, bush_id in result.all():
+            if bush_id is None:
+                continue
+            data = grouped.get(int(bush_id))
+            if data is None:
+                continue
+            data["counts"][report.status] += 1
+            if report.status in self.PROBLEM_STATUSES:
+                data["problem_reports"].append(report)
+            if (
+                report.status == ClosingStatus.WAITING
+                and report.actual_submitted_at is None
+            ):
+                data["waiting_reports"].append(report)
+            if (
+                report.status in self.SUBMITTED_STATUSES
+                and report.cash_amount is not None
+            ):
+                data["cash_values"].append(
+                    Decimal(str(report.cash_amount))
+                )
+
+        statistics_by_bush: dict[int, dict[str, int | float | Decimal]] = {}
+        for bush_id, data in grouped.items():
+            counts = data["counts"]
+            expected_count = sum(
+                count
+                for status, count in counts.items()
+                if status not in self.EXCLUDED_STATUSES
+            )
+            submitted_count = sum(
+                counts[status]
+                for status in self.SUBMITTED_STATUSES
+            )
+            late_count = counts[ClosingStatus.SUBMITTED_LATE]
+            missed_count = counts[ClosingStatus.MISSED_DEADLINE]
+            cash_values = data["cash_values"]
+            total_cash = sum(cash_values, Decimal("0"))
+            average_cash = (
+                total_cash / len(cash_values)
+                if cash_values
+                else Decimal("0")
+            )
+            statistics_by_bush[bush_id] = {
+                "expected_count": expected_count,
+                "submitted_count": submitted_count,
+                "submitted_on_time_count": counts[ClosingStatus.SUBMITTED_ON_TIME],
+                "submitted_late_count": late_count,
+                "manually_confirmed_count": counts[ClosingStatus.MANUALLY_CONFIRMED],
+                "waiting_count": counts[ClosingStatus.WAITING],
+                "missed_count": missed_count,
+                "problem_count": late_count + missed_count,
+                "total_cash": total_cash.quantize(Decimal("0.01")),
+                "average_cash": average_cash.quantize(Decimal("0.01")),
+                "maximum_cash": max(cash_values, default=Decimal("0")).quantize(Decimal("0.01")),
+                "minimum_cash": min(cash_values, default=Decimal("0")).quantize(Decimal("0.01")),
+                "completion_percent": (
+                    round(submitted_count / expected_count * 100, 2)
+                    if expected_count
+                    else 0.0
+                ),
+            }
+            grouped[bush_id]["statistics"] = statistics_by_bush[bush_id]
+
+        return grouped
+
     async def count_by_status(
         self,
         *,
@@ -1791,6 +1913,92 @@ class ClosingRepository(
                 completion_percent
             ),
         }
+
+    async def get_daily_statistics_by_bush(
+        self,
+        *,
+        business_date: date,
+    ) -> dict[int, dict[str, int | float | Decimal]]:
+        """Повертає статистику закриття всіх кущів одним SQL-запитом."""
+
+        count_columns = [
+            func.count(ClosingReport.id)
+            .filter(ClosingReport.status == status)
+            .label(f"count_{status.name.lower()}")
+            for status in ClosingStatus
+        ]
+        submitted_filter = (
+            ClosingReport.status.in_(self.SUBMITTED_STATUSES)
+            & ClosingReport.cash_amount.is_not(None)
+        )
+        statement = (
+            select(
+                Store.bush_id.label("bush_id"),
+                *count_columns,
+                func.coalesce(
+                    func.sum(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("total_cash"),
+                func.coalesce(
+                    func.avg(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("average_cash"),
+                func.coalesce(
+                    func.max(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("maximum_cash"),
+                func.coalesce(
+                    func.min(ClosingReport.cash_amount).filter(submitted_filter),
+                    0,
+                ).label("minimum_cash"),
+            )
+            .join(Store, Store.id == ClosingReport.store_id)
+            .where(
+                ClosingReport.business_date == business_date,
+                Store.bush_id.is_not(None),
+            )
+            .group_by(Store.bush_id)
+        )
+        result = await self.session.execute(statement)
+        statistics: dict[int, dict[str, int | float | Decimal]] = {}
+
+        for row in result.mappings().all():
+            counts = {
+                status: int(row[f"count_{status.name.lower()}"] or 0)
+                for status in ClosingStatus
+            }
+            expected_count = sum(
+                count
+                for status, count in counts.items()
+                if status not in self.EXCLUDED_STATUSES
+            )
+            submitted_count = sum(
+                counts[status]
+                for status in self.SUBMITTED_STATUSES
+            )
+            late_count = counts[ClosingStatus.SUBMITTED_LATE]
+            missed_count = counts[ClosingStatus.MISSED_DEADLINE]
+            statistics[int(row["bush_id"])] = {
+                "expected_count": expected_count,
+                "submitted_count": submitted_count,
+                "submitted_on_time_count": counts[ClosingStatus.SUBMITTED_ON_TIME],
+                "submitted_late_count": late_count,
+                "manually_confirmed_count": counts[ClosingStatus.MANUALLY_CONFIRMED],
+                "waiting_count": counts[ClosingStatus.WAITING],
+                "missed_count": missed_count,
+                "problem_count": late_count + missed_count,
+                "total_cash": Decimal(str(row["total_cash"] or 0)).quantize(Decimal("0.01")),
+                "average_cash": Decimal(str(row["average_cash"] or 0)).quantize(Decimal("0.01")),
+                "maximum_cash": Decimal(str(row["maximum_cash"] or 0)).quantize(Decimal("0.01")),
+                "minimum_cash": Decimal(str(row["minimum_cash"] or 0)).quantize(Decimal("0.01")),
+                "completion_percent": (
+                    round(submitted_count / expected_count * 100, 2)
+                    if expected_count > 0
+                    else 0.0
+                ),
+            }
+
+        return statistics
 
     # ==========================================
     # ДОПОМІЖНІ МЕТОДИ

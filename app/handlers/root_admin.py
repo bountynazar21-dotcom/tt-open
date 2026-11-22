@@ -82,7 +82,7 @@ from app.keyboards.director import (
     director_users_keyboard,
 )
 
-from app.utils.datetime import today_local
+from app.utils.datetime import closing_business_date, now_local, today_local
 
 logger = logging.getLogger(
     __name__
@@ -640,58 +640,60 @@ async def query_all_stores(
         )
     )
 
-    for store_id in direct_ids:
-        service = get_service(
-            data,
-            "stores",
-            "store",
+    if direct_ids:
+        repositories = data.get("repositories")
+        session = (
+            data.get("session")
+            or data.get("db_session")
+            or getattr(repositories, "session", None)
         )
+        if session is not None:
+            from sqlalchemy import select
+            from app.database.models.store import Store
 
-        store = None
-
-        if service is not None:
-            for method_name in (
-                "get_store",
-                "get_store_or_raise",
-                "get_by_id",
-                "get",
-            ):
-                method = getattr(
-                    service,
-                    method_name,
-                    None,
+            direct_result = await session.scalars(
+                select(Store).where(Store.id.in_(direct_ids))
+            )
+            stores.extend(direct_result.unique().all())
+        else:
+            for store_id in direct_ids:
+                service = get_service(
+                    data,
+                    "stores",
+                    "store",
                 )
+                store = None
 
-                if not callable(
-                    method
-                ):
-                    continue
-
-                try:
-                    store = await call_method(
-                        method,
-                        {
-                            "store_id":
-                                store_id,
-
-                            "id":
-                                store_id,
-
-                            "include_inactive":
-                                True,
-                        },
-                    )
-
-                except Exception:
-                    continue
+                if service is not None:
+                    for method_name in (
+                        "get_store",
+                        "get_store_or_raise",
+                        "get_by_id",
+                        "get",
+                    ):
+                        method = getattr(
+                            service,
+                            method_name,
+                            None,
+                        )
+                        if not callable(method):
+                            continue
+                        try:
+                            store = await call_method(
+                                method,
+                                {
+                                    "store_id": store_id,
+                                    "id": store_id,
+                                    "include_inactive": True,
+                                },
+                            )
+                        except Exception:
+                            continue
+                        if store is not None:
+                            break
 
                 if store is not None:
-                    break
-
-        if store is not None:
-            stores.append(
-                store
-            )
+                    stores.append(store)
 
     # -----------------------------------------------------
     # DEDUPLICATE
@@ -809,6 +811,54 @@ async def query_network_users(
         )
         return []
 
+async def _prime_director_bush_cache(
+    *,
+    stores: list[Any],
+    data: dict[str, Any],
+) -> None:
+    """Bulk-load bush names used by a Director store list."""
+    bush_ids = {
+        store_bush_id(store)
+        for store in stores
+        if store_bush_id(store) > 0
+    }
+    cached_bushes = data.setdefault(
+        "_director_bush_by_id",
+        {},
+    )
+    missing_ids = bush_ids - set(cached_bushes)
+    if not missing_ids:
+        data["_director_bush_cache_ready"] = True
+        return
+
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
+    if session is None:
+        return
+
+    from sqlalchemy import select
+    from app.database.models.bush import Bush
+
+    try:
+        result = await session.scalars(
+            select(Bush).where(Bush.id.in_(missing_ids))
+        )
+        bushes = list(result.unique().all())
+    except Exception:
+        logger.exception("Director bulk bush preload failed")
+        return
+
+    cached_bushes.update({
+        int(bush.id): bush
+        for bush in bushes
+    })
+    data["_director_bush_cache_ready"] = True
+
+
 async def store_bush_name(
     *,
     store: Any,
@@ -825,10 +875,18 @@ async def store_bush_name(
     if bush_id <= 0:
         return None
 
-    bush = await load_bush(
-        bush_id=bush_id,
-        data=data,
-    )
+    if data.get("_director_bush_cache_ready"):
+        # A successful bulk preload also caches missing IDs as absent.
+        # Do not fall back to one SELECT per store for an unknown bush ID.
+        bush = data.get(
+            "_director_bush_by_id",
+            {},
+        ).get(bush_id)
+    else:
+        bush = await load_bush(
+            bush_id=bush_id,
+            data=data,
+        )
 
     if bush is not None:
         value = first_attr(
@@ -871,21 +929,25 @@ async def _prime_director_status_cache(
     from app.database.models.opening_checkin import (
         OpeningCheckin,
     )
-    from app.utils.datetime import today_local
+    from app.utils.datetime import closing_business_date, now_local, today_local
 
     today = today_local()
+    closing_date = closing_business_date(now_local())
+    cache_key = (today, closing_date)
 
     if (
         data.get(
             "_director_status_cache_date"
         )
-        == today
+        == cache_key
     ):
         return
 
+    repositories = data.get("repositories")
     session = (
         data.get("session")
         or data.get("db_session")
+        or getattr(repositories, "session", None)
     )
 
     if session is None:
@@ -909,7 +971,7 @@ async def _prime_director_status_cache(
                 ClosingReport
             ).where(
                 ClosingReport.business_date
-                == today
+                == closing_date
             )
         )
 
@@ -955,12 +1017,13 @@ async def _prime_director_status_cache(
 
     data[
         "_director_status_cache_date"
-    ] = today
+    ] = cache_key
 
     logger.info(
         "Director bulk cache ready | "
-        "date=%s openings=%s closings=%s",
+        "opening_date=%s closing_date=%s openings=%s closings=%s",
         today,
+        closing_date,
         len(opening_rows),
         len(closing_rows),
     )
@@ -1148,6 +1211,10 @@ async def build_director_store_items(
     await _prime_director_status_cache(
         data=data,
     )
+    await _prime_director_bush_cache(
+        stores=stores,
+        data=data,
+    )
 
     result: list[
         DirectorStoreItem
@@ -1206,6 +1273,69 @@ async def count_bush_stores(
     )
 
 
+async def count_bush_stores_many(
+    *,
+    bushes: list[Any],
+    data: dict[str, Any],
+) -> dict[int, int]:
+    """Count stores for a bush list in one query, respecting visible scope."""
+    bush_ids = {
+        object_id(bush)
+        for bush in bushes
+        if object_id(bush) > 0
+    }
+    if not bush_ids:
+        return {}
+
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
+    if session is None:
+        return {
+            bush_id: await count_bush_stores(
+                bush_id=bush_id,
+                data=data,
+            )
+            for bush_id in bush_ids
+        }
+
+    from sqlalchemy import select
+    from app.database.models.store import Store
+
+    result = await session.execute(
+        select(Store.id, Store.bush_id).where(
+            Store.bush_id.in_(bush_ids)
+        )
+    )
+    rows_by_bush: dict[int, list[int]] = {}
+    for store_id, bush_id in result.all():
+        if bush_id is not None:
+            rows_by_bush.setdefault(int(bush_id), []).append(int(store_id))
+
+    if has_network_access(data):
+        return {
+            bush_id: len(rows_by_bush.get(bush_id, []))
+            for bush_id in bush_ids
+        }
+
+    allowed_bushes = accessible_bush_ids(data)
+    direct_store_ids = accessible_store_ids(data)
+    return {
+        bush_id: (
+            len(rows_by_bush.get(bush_id, []))
+            if bush_id in allowed_bushes
+            else sum(
+                store_id in direct_store_ids
+                for store_id in rows_by_bush.get(bush_id, [])
+            )
+        )
+        for bush_id in bush_ids
+    }
+
+
 async def build_director_bush_items(
     *,
     bushes: list[Any],
@@ -1216,6 +1346,11 @@ async def build_director_bush_items(
     """
     Bush ORM -> DirectorBushItem.
     """
+
+    stores_count_by_bush = await count_bush_stores_many(
+        bushes=bushes,
+        data=data,
+    )
 
     result: list[
         DirectorBushItem
@@ -1238,11 +1373,9 @@ async def build_director_bush_items(
             ),
         )
 
-        stores_count = (
-            await count_bush_stores(
-                bush_id=bush_id,
-                data=data,
-            )
+        stores_count = stores_count_by_bush.get(
+            bush_id,
+            0,
         )
 
         item = create_model(
@@ -2886,6 +3019,27 @@ async def director_missing_closing_callback(
         )
     ]
 
+    await _prime_director_status_cache(
+        data=data,
+    )
+    await _prime_director_bush_cache(
+        stores=stores,
+        data=data,
+    )
+
+    opening_by_store = data.get(
+        "_director_opening_by_store",
+        {},
+    )
+    closing_by_store = data.get(
+        "_director_closing_by_store",
+        {},
+    )
+    has_bulk_cache = (
+        data.get("_director_status_cache_date")
+        is not None
+    )
+
     missing_items: list[
         DirectorStoreItem
     ] = []
@@ -2895,11 +3049,14 @@ async def director_missing_closing_callback(
             store
         )
 
-        opening = await get_opening_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            opening = opening_by_store.get(store_id)
+        else:
+            opening = await get_opening_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
         # Магазин не відкривався —
         # він не належить до списку
@@ -2909,11 +3066,14 @@ async def director_missing_closing_callback(
         ):
             continue
 
-        closing = await get_closing_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            closing = closing_by_store.get(store_id)
+        else:
+            closing = await get_closing_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
         if result_is_completed(
             closing

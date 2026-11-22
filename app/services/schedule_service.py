@@ -227,24 +227,21 @@ class ScheduleService:
             store_id,
         )
 
-        items: list[SchedulePreviewItem] = []
-
-        current_date = date_from
-
-        while current_date <= date_to:
-            effective_schedule = (
-                await self.repositories.schedules
-                .get_effective_schedule(
-                    store=store,
-                    business_date=current_date,
-                )
+        effective_schedules = (
+            await self.repositories.schedules
+            .get_effective_schedules_for_store_range(
+                store=store,
+                date_from=date_from,
+                date_to=date_to,
             )
+        )
 
-            weekday = current_date.weekday()
-
+        items: list[SchedulePreviewItem] = []
+        for effective_schedule in effective_schedules:
+            weekday = effective_schedule.business_date.weekday()
             items.append(
                 SchedulePreviewItem(
-                    business_date=current_date,
+                    business_date=effective_schedule.business_date,
                     weekday=weekday,
                     weekday_name=(
                         self.repositories.schedules
@@ -253,8 +250,6 @@ class ScheduleService:
                     schedule=effective_schedule,
                 )
             )
-
-            current_date += timedelta(days=1)
 
         return items
 
@@ -353,6 +348,85 @@ class ScheduleService:
             current_values=current_values,
         )
 
+    async def set_store_weekdays(
+        self,
+        *,
+        actor: User,
+        store_id: int,
+        items: list[dict[str, Any]],
+        reason: str | None = None,
+    ) -> list[WeekdayScheduleChangeResult]:
+        """Updates several weekdays with one locked read and one flush."""
+        if not items:
+            return []
+
+        store = await self.access.require_schedule_management(
+            actor,
+            store_id,
+        )
+        weekdays = {
+            int(item["weekday"])
+            for item in items
+        }
+        for weekday in weekdays:
+            self.repositories.schedules.validate_weekday(
+                weekday
+            )
+
+        previous_schedules = (
+            await self.repositories.schedules
+            .get_weekly_schedule(
+                store_id=store.id,
+                weekdays=weekdays,
+                for_update=True,
+            )
+        )
+        previous_by_weekday = {
+            schedule.weekday: self.weekday_schedule_snapshot(
+                schedule
+            )
+            for schedule in previous_schedules
+        }
+
+        schedules = (
+            await self.repositories.schedules
+            .upsert_weekday_schedules_many(
+                store_id=store.id,
+                items=items,
+                existing_schedules=previous_schedules,
+            )
+        )
+
+        results: list[WeekdayScheduleChangeResult] = []
+        for schedule, was_created in schedules:
+            previous_values = previous_by_weekday.get(
+                schedule.weekday,
+                {},
+            )
+            current_values = self.weekday_schedule_snapshot(
+                schedule
+            )
+            await self.log_weekday_change(
+                actor=actor,
+                store=store,
+                schedule=schedule,
+                previous_values=previous_values,
+                current_values=current_values,
+                reason=reason,
+                was_created=was_created,
+            )
+            results.append(
+                WeekdayScheduleChangeResult(
+                    store=store,
+                    schedule=schedule,
+                    was_created=was_created,
+                    previous_values=previous_values,
+                    current_values=current_values,
+                )
+            )
+
+        return results
+
     async def set_store_day_off(
         self,
         *,
@@ -428,26 +502,18 @@ class ScheduleService:
             set(target_weekdays)
         )
 
-        previous_snapshots: dict[
-            int,
-            dict[str, Any],
-        ] = {}
-
-        for weekday in normalized_targets:
-            previous = (
-                await self.repositories.schedules
-                .get_weekday_schedule(
-                    store_id=store.id,
-                    weekday=weekday,
-                    for_update=True,
-                )
+        previous_schedules = (
+            await self.repositories.schedules
+            .get_weekly_schedule(
+                store_id=store.id,
+                weekdays=set(normalized_targets),
+                for_update=True,
             )
-
-            previous_snapshots[weekday] = (
-                self.weekday_schedule_snapshot(
-                    previous
-                )
-            )
+        )
+        previous_snapshots = {
+            schedule.weekday: self.weekday_schedule_snapshot(schedule)
+            for schedule in previous_schedules
+        }
 
         schedules = (
             await self.repositories.schedules

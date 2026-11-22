@@ -490,6 +490,8 @@ class SettingsService:
         is_secret: bool | None = None,
         update_description: bool = False,
         update_category: bool = False,
+        _preloaded_setting: Any | None = None,
+        _setting_preloaded: bool = False,
     ) -> SettingsChangeResult:
         """Створює або змінює налаштування."""
 
@@ -502,6 +504,15 @@ class SettingsService:
                 reason,
                 field_name="Причина",
             )
+        )
+
+        setting_preload_kwargs = (
+            {
+                "_preloaded_setting": _preloaded_setting,
+                "_setting_preloaded": True,
+            }
+            if _setting_preloaded
+            else {}
         )
 
         result = (
@@ -520,6 +531,7 @@ class SettingsService:
                 update_category=(
                     update_category
                 ),
+                **setting_preload_kwargs,
             )
         )
 
@@ -580,14 +592,31 @@ class SettingsService:
             SettingsChangeResult
         ] = []
 
+        preloaded_settings = (
+            await self.repositories.settings
+            .get_by_keys_for_update(
+                list(values.keys())
+            )
+        )
+
         for key, value in values.items():
+            normalized_key = (
+                self.repositories.settings.normalize_key(
+                    key
+                )
+            )
             result = await self.set_setting(
                 actor=actor,
                 key=key,
                 value=value,
                 reason=normalized_reason,
+                _preloaded_setting=preloaded_settings.get(
+                    normalized_key
+                ),
+                _setting_preloaded=True,
             )
 
+            preloaded_settings[normalized_key] = result.setting
             results.append(result)
 
         return BulkSettingsChangeResult(

@@ -865,33 +865,38 @@ async def load_lion_stores(
     # -----------------------------------------------------
 
     if direct_store_ids:
-        for store_id in sorted(
-            direct_store_ids
-        ):
-            store = await load_store(
-                store_id=store_id,
-                data=data,
-            )
+        repositories = data.get("repositories")
+        session = (
+            data.get("session")
+            or data.get("db_session")
+            or getattr(repositories, "session", None)
+        )
+        direct_stores: list[Any] = []
 
-            if store is None:
-                continue
+        if session is not None:
+            from sqlalchemy import select
+            from app.database.models.store import Store
 
-            item_bush_id = (
-                store_bush_id(
-                    store
+            result = await session.scalars(
+                select(Store).where(
+                    Store.id.in_(direct_store_ids)
                 )
             )
+            direct_stores = list(result.unique().all())
+        else:
+            for store_id in sorted(direct_store_ids):
+                store = await load_store(
+                    store_id=store_id,
+                    data=data,
+                )
+                if store is not None:
+                    direct_stores.append(store)
 
-            if (
-                item_bush_id > 0
-                and item_bush_id
-                != bush_id
-            ):
+        for store in direct_stores:
+            item_bush_id = store_bush_id(store)
+            if item_bush_id > 0 and item_bush_id != bush_id:
                 continue
-
-            stores.append(
-                store
-            )
+            stores.append(store)
 
     # -----------------------------------------------------
     # BUSH ACCESS
@@ -926,16 +931,38 @@ async def load_lion_stores(
         Any,
     ] = {}
 
-    for item in stores:
-        if isinstance(
-            item,
-            int,
-        ):
-            store = await load_store(
-                store_id=item,
-                data=data,
-            )
+    unresolved_ids = {
+        item
+        for item in stores
+        if isinstance(item, int)
+    }
+    stores_by_id: dict[int, Any] = {}
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
+    if unresolved_ids and session is not None:
+        from sqlalchemy import select
+        from app.database.models.store import Store
 
+        store_result = await session.scalars(
+            select(Store).where(Store.id.in_(unresolved_ids))
+        )
+        stores_by_id = {
+            int(store.id): store
+            for store in store_result.unique().all()
+        }
+
+    for item in stores:
+        if isinstance(item, int):
+            store = stores_by_id.get(item)
+            if store is None and session is None:
+                store = await load_store(
+                    store_id=item,
+                    data=data,
+                )
         else:
             store = item
 
@@ -989,6 +1016,61 @@ async def load_lion_stores(
 # =========================================================
 
 
+async def _prime_lion_status_cache(
+    *,
+    data: dict[str, Any],
+) -> None:
+    """Load today's opening and closing rows in two queries."""
+    from sqlalchemy import select
+
+    from app.database.models.closing_report import ClosingReport
+    from app.database.models.opening_checkin import OpeningCheckin
+    from app.utils.datetime import closing_business_date, now_local, today_local
+
+    today = today_local()
+    closing_date = closing_business_date(now_local())
+    cache_key = (today, closing_date)
+    if data.get("_lion_status_cache_date") == cache_key:
+        return
+
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
+    if session is None:
+        return
+
+    try:
+        opening_result = await session.scalars(
+            select(OpeningCheckin).where(OpeningCheckin.business_date == today)
+        )
+        closing_result = await session.scalars(
+            select(ClosingReport).where(ClosingReport.business_date == closing_date)
+        )
+        opening_rows = list(opening_result.unique().all())
+        closing_rows = list(closing_result.unique().all())
+    except Exception:
+        logger.exception("Lion bulk status preload failed | date=%s", today)
+        return
+
+    data["_lion_opening_by_store"] = {
+        int(row.store_id): row
+        for row in opening_rows
+        if getattr(row, "store_id", None) is not None
+    }
+    data["_lion_closing_by_store"] = {
+        int(row.store_id): row
+        for row in closing_rows
+        if getattr(row, "store_id", None) is not None
+    }
+    data["_lion_status_cache_date"] = cache_key
+    logger.info(
+        "Lion bulk status cache ready | opening_date=%s closing_date=%s openings=%s closings=%s",
+        today, closing_date, len(opening_rows), len(closing_rows),
+    )
+
 async def build_lion_store_item(
     *,
     store: Any,
@@ -1010,17 +1092,16 @@ async def build_lion_store_item(
         store
     )
 
-    opening = await get_opening_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
-
-    closing = await get_closing_status(
-        store_id=store_id,
-        user=user,
-        data=data,
-    )
+    if data.get("_lion_status_cache_date") is not None:
+        opening = data.get("_lion_opening_by_store", {}).get(store_id)
+        closing = data.get("_lion_closing_by_store", {}).get(store_id)
+    else:
+        opening = await get_opening_status(
+            store_id=store_id, user=user, data=data,
+        )
+        closing = await get_closing_status(
+            store_id=store_id, user=user, data=data,
+        )
 
     opened = opening_exists(
         opening
@@ -1151,6 +1232,8 @@ async def build_lion_store_items(
     """
     Статуси всіх ТТ.
     """
+
+    await _prime_lion_status_cache(data=data)
 
     result: list[
         LionStoreItem

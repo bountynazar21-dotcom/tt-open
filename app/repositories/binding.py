@@ -47,11 +47,47 @@ class BindingRepository:
     # ПРИВ’ЯЗКИ КОРИСТУВАЧІВ ДО ТТ
     # ==========================================
 
+    async def get_store_bindings_for_users(
+        self,
+        *,
+        user_ids: set[int],
+        store_id: int,
+        for_update: bool = False,
+    ) -> dict[int, UserStoreBinding]:
+        """Loads and optionally locks all bindings to one store in one query."""
+        if not user_ids:
+            return {}
+
+        statement = (
+            select(UserStoreBinding)
+            .where(
+                UserStoreBinding.user_id.in_(user_ids),
+                UserStoreBinding.store_id == store_id,
+            )
+            .order_by(
+                UserStoreBinding.id.asc()
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(
+                of=UserStoreBinding
+            )
+
+        result = await self.session.scalars(statement)
+        bindings_by_user: dict[int, UserStoreBinding] = {}
+        for binding in result.unique().all():
+            bindings_by_user.setdefault(
+                int(binding.user_id),
+                binding,
+            )
+        return bindings_by_user
+
     async def get_store_binding(
         self,
         *,
         user_id: int,
         store_id: int,
+        active_only: bool = False,
         for_update: bool = False,
     ) -> UserStoreBinding | None:
         """Повертає прив’язку користувача до ТТ."""
@@ -69,7 +105,13 @@ class BindingRepository:
             .where(
                 UserStoreBinding.user_id == user_id,
                 UserStoreBinding.store_id == store_id,
+                *(
+                    [UserStoreBinding.status == BindingStatus.APPROVED]
+                    if active_only
+                    else []
+                ),
             )
+            .order_by(UserStoreBinding.id.asc())
             .limit(1)
         )
 
@@ -646,6 +688,48 @@ class BindingRepository:
             result.unique().all()
         )
 
+    async def get_users_for_stores(
+        self,
+        store_ids: set[int] | list[int] | tuple[int, ...],
+        *,
+        active_only: bool = True,
+    ) -> list[User]:
+        """Return users bound to any of the supplied stores in one query."""
+        normalized_ids = {
+            int(store_id)
+            for store_id in store_ids
+            if int(store_id) > 0
+        }
+        if not normalized_ids:
+            return []
+
+        conditions = [
+            UserStoreBinding.store_id.in_(normalized_ids),
+            UserStoreBinding.status == BindingStatus.APPROVED,
+        ]
+        if active_only:
+            conditions.extend(
+                [
+                    User.status == UserStatus.ACTIVE,
+                    User.is_blocked.is_(False),
+                ]
+            )
+
+        statement = (
+            select(User)
+            .join(
+                UserStoreBinding,
+                UserStoreBinding.user_id == User.id,
+            )
+            .where(*conditions)
+            .order_by(
+                User.full_name.asc(),
+                User.id.asc(),
+            )
+        )
+        result = await self.session.scalars(statement)
+        return list(result.unique().all())
+
     async def user_has_store_access(
         self,
         *,
@@ -763,17 +847,68 @@ class BindingRepository:
     # ПРИВ’ЯЗКИ ДО КУЩІВ
     # ==========================================
 
+    async def get_bush_bindings_for_users(
+        self,
+        *,
+        user_ids: set[int],
+        bush_id: int,
+        role: UserRole,
+        for_update: bool = False,
+    ) -> dict[int, UserBushBinding]:
+        """Loads and optionally locks one bush role binding per user in one query."""
+        if not user_ids:
+            return {}
+
+        self.validate_bush_role(role)
+        statement = (
+            select(UserBushBinding)
+            .where(
+                UserBushBinding.user_id.in_(user_ids),
+                UserBushBinding.bush_id == bush_id,
+                UserBushBinding.role == role,
+            )
+            .order_by(
+                UserBushBinding.id.asc()
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(
+                of=UserBushBinding
+            )
+
+        result = await self.session.scalars(statement)
+        bindings_by_user: dict[int, UserBushBinding] = {}
+        for binding in result.unique().all():
+            bindings_by_user.setdefault(
+                int(binding.user_id),
+                binding,
+            )
+        return bindings_by_user
+
     async def get_bush_binding(
         self,
         *,
         user_id: int,
         bush_id: int,
-        role: UserRole,
+        role: UserRole | None = None,
+        active_only: bool = False,
         for_update: bool = False,
     ) -> UserBushBinding | None:
         """Повертає управлінську прив’язку до куща."""
 
-        self.validate_bush_role(role)
+        if role is not None:
+            self.validate_bush_role(role)
+
+        conditions = [
+            UserBushBinding.user_id == user_id,
+            UserBushBinding.bush_id == bush_id,
+        ]
+        if role is not None:
+            conditions.append(UserBushBinding.role == role)
+        if active_only:
+            conditions.append(
+                UserBushBinding.status == BindingStatus.APPROVED
+            )
 
         statement = (
             select(UserBushBinding)
@@ -785,11 +920,8 @@ class BindingRepository:
                     UserBushBinding.bush
                 ),
             )
-            .where(
-                UserBushBinding.user_id == user_id,
-                UserBushBinding.bush_id == bush_id,
-                UserBushBinding.role == role,
-            )
+            .where(*conditions)
+            .order_by(UserBushBinding.id.asc())
             .limit(1)
         )
 
@@ -1235,6 +1367,35 @@ class BindingRepository:
         return list(
             result.unique().all()
         )
+
+    async def get_user_bush_ids(
+        self,
+        *,
+        user_id: int,
+        roles: set[UserRole] | None = None,
+    ) -> set[int]:
+        """Returns all bushes accessible to a user in one query."""
+        allowed_roles = roles or {
+            UserRole.BUSH_ADMIN,
+            UserRole.LION,
+        }
+        for role in allowed_roles:
+            self.validate_bush_role(role)
+
+        result = await self.session.scalars(
+            select(UserBushBinding.bush_id)
+            .where(
+                UserBushBinding.user_id == user_id,
+                UserBushBinding.role.in_(allowed_roles),
+                UserBushBinding.status == BindingStatus.APPROVED,
+            )
+            .distinct()
+        )
+        return {
+            int(bush_id)
+            for bush_id in result.all()
+            if bush_id is not None
+        }
 
     async def user_has_bush_access(
         self,

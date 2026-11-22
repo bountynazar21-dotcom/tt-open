@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import (
     func,
     select,
+    tuple_,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -305,40 +306,62 @@ class OpeningRepository(
         self,
         plans: Iterable[OpeningPlan],
     ) -> list[OpeningCheckin]:
-        """
-        Створює відсутні ранкові записи.
-
-        Існуючі записи не змінюються.
-        """
-
-        created_records: list[
-            OpeningCheckin
-        ] = []
-
-        unique_plans: dict[
-            tuple[int, date],
-            OpeningPlan,
-        ] = {}
-
+        """Create missing opening rows with one read across all dates/stores."""
+        plans_by_key: dict[tuple[date, int], OpeningPlan] = {}
         for plan in plans:
-            key = (
-                plan.store_id,
-                plan.business_date,
+            plans_by_key[(plan.business_date, plan.store_id)] = plan
+
+        if not plans_by_key:
+            return []
+
+        existing_result = await self.session.execute(
+            select(
+                OpeningCheckin.business_date,
+                OpeningCheckin.store_id,
+            ).where(
+                tuple_(
+                    OpeningCheckin.business_date,
+                    OpeningCheckin.store_id,
+                ).in_(list(plans_by_key))
             )
+        )
+        existing_keys = {
+            (business_date, int(store_id))
+            for business_date, store_id in existing_result.all()
+        }
 
-            unique_plans[key] = plan
+        missing_plans = [
+            plan
+            for key, plan in plans_by_key.items()
+            if key not in existing_keys
+        ]
+        if not missing_plans:
+            return []
 
-        for plan in unique_plans.values():
-            checkin, was_created = (
-                await self.create_from_plan(
-                    plan
-                )
+        new_records = [
+            OpeningCheckin.create_waiting(
+                store_id=plan.store_id,
+                business_date=plan.business_date,
+                scheduled_open_time=plan.scheduled_open_time,
+                control_deadline=plan.control_deadline,
             )
+            for plan in missing_plans
+        ]
 
-            if was_created:
-                created_records.append(checkin)
-
-        return created_records
+        try:
+            async with self.session.begin_nested():
+                self.session.add_all(new_records)
+                await self.session.flush()
+            return new_records
+        except IntegrityError:
+            # A concurrent scheduler may win the unique constraint.
+            # Retry only the rare race path with the safe get-or-create operation.
+            created_records: list[OpeningCheckin] = []
+            for plan in missing_plans:
+                checkin, was_created = await self.create_from_plan(plan)
+                if was_created:
+                    created_records.append(checkin)
+            return created_records
 
     # ==========================================
     # ПІДТВЕРДЖЕННЯ ВІДКРИТТЯ
@@ -1191,6 +1214,106 @@ class OpeningRepository(
     # ==========================================
     # СТАТИСТИКА
     # ==========================================
+
+
+    async def get_summary_data_by_bush(
+        self,
+        *,
+        business_date: date,
+        bush_ids: set[int],
+    ) -> dict[int, dict[str, Any]]:
+        """Loads all bush summary records and statistics in one query."""
+        if not bush_ids:
+            return {}
+
+        grouped: dict[int, dict[str, Any]] = {
+            bush_id: {
+                "counts": {status: 0 for status in OpeningStatus},
+                "problem_checkins": [],
+                "waiting_checkins": [],
+                "total_lateness": 0,
+                "maximum_lateness": 0,
+                "positive_lateness": [],
+            }
+            for bush_id in bush_ids
+        }
+        statement = (
+            select(OpeningCheckin, Store.bush_id)
+            .join(Store, Store.id == OpeningCheckin.store_id)
+            .where(
+                OpeningCheckin.business_date == business_date,
+                Store.bush_id.in_(bush_ids),
+            )
+            .order_by(Store.store_number.asc())
+        )
+        result = await self.session.execute(statement)
+
+        for checkin, bush_id in result.all():
+            if bush_id is None:
+                continue
+            data = grouped.get(int(bush_id))
+            if data is None:
+                continue
+            data["counts"][checkin.status] += 1
+            if checkin.status in self.PROBLEM_STATUSES:
+                data["problem_checkins"].append(checkin)
+            if (
+                checkin.status == OpeningStatus.WAITING
+                and checkin.actual_open_time is None
+            ):
+                data["waiting_checkins"].append(checkin)
+
+            lateness = int(checkin.lateness_minutes or 0)
+            data["total_lateness"] += lateness
+            data["maximum_lateness"] = max(
+                data["maximum_lateness"],
+                lateness,
+            )
+            if lateness > 0:
+                data["positive_lateness"].append(lateness)
+
+        statistics_by_bush: dict[int, dict[str, int | float]] = {}
+        for bush_id, data in grouped.items():
+            counts = data["counts"]
+            expected_count = sum(
+                count
+                for status, count in counts.items()
+                if status not in self.EXCLUDED_STATUSES
+            )
+            opened_count = sum(
+                counts[status]
+                for status in self.OPENED_STATUSES
+            )
+            late_count = sum(
+                counts[status]
+                for status in self.LATE_STATUSES
+            )
+            positive_lateness = data["positive_lateness"]
+            statistics_by_bush[bush_id] = {
+                "expected_count": expected_count,
+                "opened_count": opened_count,
+                "waiting_count": counts[OpeningStatus.WAITING],
+                "missed_count": counts[OpeningStatus.MISSED_CONTROL_DEADLINE],
+                "opened_early_count": counts[OpeningStatus.OPENED_EARLY],
+                "opened_on_time_count": counts[OpeningStatus.OPENED_ON_TIME],
+                "opened_late_count": counts[OpeningStatus.OPENED_LATE],
+                "opened_after_alert_count": counts[OpeningStatus.OPENED_AFTER_ALERT],
+                "manually_confirmed_count": counts[OpeningStatus.MANUALLY_CONFIRMED],
+                "late_count": late_count,
+                "total_lateness_minutes": data["total_lateness"],
+                "maximum_lateness_minutes": data["maximum_lateness"],
+                "average_lateness_minutes": round(
+                    sum(positive_lateness) / len(positive_lateness),
+                    2,
+                ) if positive_lateness else 0.0,
+                "completion_percent": round(
+                    opened_count / expected_count * 100,
+                    2,
+                ) if expected_count else 0.0,
+            }
+            grouped[bush_id]["statistics"] = statistics_by_bush[bush_id]
+
+        return grouped
 
     async def count_by_status(
         self,

@@ -1237,14 +1237,17 @@ async def build_root_store_items(
 
             if opening_repo is not None and closing_repo is not None:
                 from app.handlers.opening import now_local
+                from app.utils.datetime import closing_business_date
 
-                business_date = now_local().date()
+                local_now = now_local()
+                opening_date = local_now.date()
+                closing_date = closing_business_date(local_now)
 
                 opening_records = await opening_repo.get_for_date(
-                    business_date=business_date,
+                    business_date=opening_date,
                 )
                 closing_records = await closing_repo.get_for_date(
-                    business_date=business_date,
+                    business_date=closing_date,
                     lightweight=True,
                 )
                 clusters = await query_clusters(data=data)
@@ -1533,8 +1536,11 @@ async def _load_root_dashboard_fast(
     from app.database.models.opening_checkin import OpeningCheckin
     from app.database.models.closing_report import ClosingReport
     from app.handlers.opening import now_local
+    from app.utils.datetime import closing_business_date
 
-    business_date = now_local().date()
+    local_now = now_local()
+    opening_date = local_now.date()
+    closing_date = closing_business_date(local_now)
 
     queries = (
         select(
@@ -1579,7 +1585,7 @@ async def _load_root_dashboard_fast(
             OpeningCheckin.actual_open_time,
             OpeningCheckin.lateness_minutes,
         ).where(
-            OpeningCheckin.business_date == business_date
+            OpeningCheckin.business_date == opening_date
         ),
 
         select(
@@ -1588,7 +1594,7 @@ async def _load_root_dashboard_fast(
             ClosingReport.cash_amount,
             ClosingReport.receipt_file_id,
         ).where(
-            ClosingReport.business_date == business_date
+            ClosingReport.business_date == closing_date
         ),
     )
 
@@ -1664,13 +1670,16 @@ async def build_root_dashboard(
             # Use the same local business date as the existing
             # opening/closing handlers.
             from app.handlers.opening import now_local
+            from app.utils.datetime import closing_business_date
 
-            business_date = now_local().date()
+            local_now = now_local()
+            opening_date = local_now.date()
+            closing_date = closing_business_date(local_now)
 
             if opening_repository is not None:
                 opening_records = (
                     await opening_repository.get_for_date(
-                        business_date=business_date,
+                        business_date=opening_date,
                     )
                 )
 
@@ -1678,7 +1687,7 @@ async def build_root_dashboard(
             if closing_repository is not None:
                 closing_records = (
                     await closing_repository.get_for_date(
-                        business_date=business_date,
+                        business_date=closing_date,
                     )
                 )
 

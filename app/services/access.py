@@ -629,9 +629,14 @@ class AccessService:
                 store_id=store_id,
             )
 
-        store = await self.get_store_or_raise(
-            store_id
-        )
+        if store is None:
+            store = await self.get_store_or_raise(
+                store_id
+            )
+        elif store.id != store_id:
+            raise ValueError(
+                "Передана інша торгова точка для перевірки доступу."
+            )
 
         if (
             user.role in self.BUSH_VIEW_ROLES
@@ -781,6 +786,9 @@ class AccessService:
         self,
         user: User,
         store_id: int,
+        *,
+        store: Store | None = None,
+        manageable_bush_ids: set[int] | None = None,
     ) -> AccessDecision:
         """Перевіряє управління конкретною ТТ."""
 
@@ -810,12 +818,18 @@ class AccessService:
             user.role == UserRole.BUSH_ADMIN
             and store.bush_id is not None
         ):
-            bush_decision = await self.can_manage_bush(
-                user,
-                store.bush_id,
-            )
+            if manageable_bush_ids is None:
+                bush_decision = await self.can_manage_bush(
+                    user,
+                    store.bush_id,
+                )
+                has_bush_access = bush_decision.allowed
+            else:
+                has_bush_access = (
+                    store.bush_id in manageable_bush_ids
+                )
 
-            if bush_decision.allowed:
+            if has_bush_access:
                 return self.allow(
                     permission,
                     "Адміністратор керує кущем цієї ТТ.",

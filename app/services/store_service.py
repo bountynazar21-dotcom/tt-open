@@ -432,10 +432,7 @@ class StoreService:
             result.unique().all()
         )
 
-        return [
-            await self.build_store_view(store)
-            for store in stores
-        ]
+        return await self.build_store_views(stores)
 
     # ==========================================
     # ПОШУК
@@ -582,11 +579,9 @@ class StoreService:
             statement
         )
 
-        return [
-            await self.build_store_view(store)
-            for store
-            in result.unique().all()
-        ]
+        return await self.build_store_views(
+            list(result.unique().all())
+        )
 
     # ==========================================
     # СТВОРЕННЯ ТТ
@@ -1523,16 +1518,30 @@ class StoreService:
 
         items: list[StoreBulkItemResult] = []
 
-        for store_data in stores:
+        normalized_codes: dict[int, str] = {}
+        for index, store_data in enumerate(stores):
             try:
-                normalized_code = (
-                    self.normalize_code(
+                normalized_codes[index] = self.normalize_code(
+                    store_data.code
+                )
+            except Exception:
+                # Keep per-item validation and error reporting inside the main loop.
+                continue
+
+        existing_by_code = await self.find_by_codes(
+            set(normalized_codes.values())
+        )
+
+        for index, store_data in enumerate(stores):
+            try:
+                normalized_code = normalized_codes.get(index)
+                if normalized_code is None:
+                    normalized_code = self.normalize_code(
                         store_data.code
                     )
-                )
 
-                existing = await self.find_by_code(
-                    normalized_code
+                existing = existing_by_code.get(
+                    normalized_code.lower()
                 )
 
                 if existing is None:
@@ -1554,6 +1563,8 @@ class StoreService:
                         ),
                         reason=normalized_reason,
                     )
+
+                    existing_by_code[normalized_code.lower()] = result.store
 
                     items.append(
                         StoreBulkItemResult(
@@ -2024,6 +2035,35 @@ class StoreService:
 
         return cluster
 
+    async def find_by_codes(
+        self,
+        codes: set[str],
+    ) -> dict[str, Store]:
+        """Loads all matching stores by normalized code in one query."""
+        normalized_codes = {
+            str(code).strip().lower()
+            for code in codes
+            if code and str(code).strip()
+        }
+        if not normalized_codes:
+            return {}
+
+        code_column = self.model_column("code")
+        if code_column is None:
+            return {}
+
+        result = await self.session.scalars(
+            select(Store)
+            .where(func.lower(code_column).in_(normalized_codes))
+            .order_by(Store.id.asc())
+        )
+        stores_by_code: dict[str, Store] = {}
+        for store in result.unique().all():
+            code = str(getattr(store, "code", "") or "").strip().lower()
+            if code:
+                stores_by_code.setdefault(code, store)
+        return stores_by_code
+
     async def find_by_code(
         self,
         code: str,
@@ -2117,109 +2157,94 @@ class StoreService:
     # STORE VIEW
     # ==========================================
 
+    async def build_store_views(
+        self,
+        stores: list[Store],
+    ) -> list[StoreView]:
+        """Builds store views with one query per related entity type."""
+        if not stores:
+            return []
+
+        bush_ids = {
+            store.bush_id
+            for store in stores
+            if store.bush_id is not None
+        }
+        cluster_ids = {
+            store.cluster_id
+            for store in stores
+            if store.cluster_id is not None
+        }
+
+        bushes = {}
+        if bush_ids:
+            result = await self.session.scalars(
+                select(Bush).where(Bush.id.in_(bush_ids))
+            )
+            bushes = {
+                bush.id: bush
+                for bush in result.unique().all()
+            }
+
+        clusters = {}
+        if cluster_ids:
+            result = await self.session.scalars(
+                select(Cluster).where(Cluster.id.in_(cluster_ids))
+            )
+            clusters = {
+                cluster.id: cluster
+                for cluster in result.unique().all()
+            }
+
+        views: list[StoreView] = []
+        for store in stores:
+            bush_id = getattr(store, "bush_id", None)
+            cluster_id = getattr(store, "cluster_id", None)
+            bush = bushes.get(bush_id)
+            cluster = clusters.get(cluster_id)
+
+            views.append(
+                StoreView(
+                    id=store.id,
+                    store_number=self.get_int_attribute(
+                        store, "store_number", "number",
+                    ),
+                    code=self.store_code(store),
+                    name=self.store_name(store),
+                    city=self.get_text_attribute(store, "city"),
+                    address=self.get_text_attribute(store, "address"),
+                    bush_id=bush_id,
+                    bush_name=(
+                        self.get_text_attribute(bush, "name", "title")
+                        if bush is not None else None
+                    ),
+                    cluster_id=cluster_id,
+                    cluster_name=(
+                        self.get_text_attribute(cluster, "name", "title")
+                        if cluster is not None else None
+                    ),
+                    cluster_hour=(
+                        self.get_int_attribute(
+                            cluster, "hour", "opening_hour", "start_hour",
+                        )
+                        if cluster is not None else None
+                    ),
+                    is_active=bool(getattr(store, "is_active", True)),
+                    created_at=getattr(store, "created_at", None),
+                    updated_at=getattr(store, "updated_at", None),
+                    raw_store=store,
+                )
+            )
+
+        return views
+
     async def build_store_view(
         self,
         store: Store,
     ) -> StoreView:
-        """
-        Формує StoreView.
-        """
-
-        bush = None
-        cluster = None
-
-        bush_id = getattr(
-            store,
-            "bush_id",
-            None,
-        )
-
-        cluster_id = getattr(
-            store,
-            "cluster_id",
-            None,
-        )
-
-        if bush_id is not None:
-            bush = await self.session.get(
-                Bush,
-                bush_id,
-            )
-
-        if cluster_id is not None:
-            cluster = await self.session.get(
-                Cluster,
-                cluster_id,
-            )
-
-        return StoreView(
-            id=store.id,
-            store_number=(
-                self.get_int_attribute(
-                    store,
-                    "store_number",
-                    "number",
-                )
-            ),
-            code=self.store_code(store),
-            name=self.store_name(store),
-            city=self.get_text_attribute(
-                store,
-                "city",
-            ),
-            address=self.get_text_attribute(
-                store,
-                "address",
-            ),
-            bush_id=bush_id,
-            bush_name=(
-                self.get_text_attribute(
-                    bush,
-                    "name",
-                    "title",
-                )
-                if bush is not None
-                else None
-            ),
-            cluster_id=cluster_id,
-            cluster_name=(
-                self.get_text_attribute(
-                    cluster,
-                    "name",
-                    "title",
-                )
-                if cluster is not None
-                else None
-            ),
-            cluster_hour=(
-                self.get_int_attribute(
-                    cluster,
-                    "hour",
-                    "opening_hour",
-                    "start_hour",
-                )
-                if cluster is not None
-                else None
-            ),
-            is_active=bool(
-                getattr(
-                    store,
-                    "is_active",
-                    True,
-                )
-            ),
-            created_at=getattr(
-                store,
-                "created_at",
-                None,
-            ),
-            updated_at=getattr(
-                store,
-                "updated_at",
-                None,
-            ),
-            raw_store=store,
-        )
+        """Builds a single StoreView."""
+        views = await self.build_store_views([store])
+        return views[0]
 
     def store_snapshot(
         self,

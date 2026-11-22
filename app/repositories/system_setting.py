@@ -388,6 +388,29 @@ class SystemSettingRepository(
     # ПОШУК ЗА КЛЮЧЕМ
     # ==========================================
 
+    async def get_by_keys_for_update(
+        self,
+        keys: Sequence[str],
+    ) -> dict[str, SystemSetting]:
+        """Loads and locks a set of settings with one SQL query."""
+        normalized_keys = {
+            self.normalize_key(key)
+            for key in keys
+        }
+        if not normalized_keys:
+            return {}
+
+        result = await self.session.scalars(
+            select(SystemSetting)
+            .where(SystemSetting.key.in_(normalized_keys))
+            .order_by(SystemSetting.key.asc())
+            .with_for_update(of=SystemSetting)
+        )
+        return {
+            setting.key: setting
+            for setting in result.unique().all()
+        }
+
     async def get_by_key(
         self,
         key: str,
@@ -713,6 +736,8 @@ class SystemSettingRepository(
         is_secret: bool | None = None,
         update_description: bool = False,
         update_category: bool = False,
+        _preloaded_setting: SystemSetting | None = None,
+        _setting_preloaded: bool = False,
     ) -> SettingUpdateResult:
         """
         Створює або оновлює налаштування.
@@ -733,9 +758,13 @@ class SystemSettingRepository(
             value
         )
 
-        setting = await self.get_by_key(
-            normalized_key,
-            for_update=True,
+        setting = (
+            _preloaded_setting
+            if _setting_preloaded
+            else await self.get_by_key(
+                normalized_key,
+                for_update=True,
+            )
         )
 
         if setting is not None:
@@ -1005,13 +1034,21 @@ class SystemSettingRepository(
             SettingUpdateResult
         ] = []
 
+        preloaded_settings = await self.get_by_keys_for_update(
+            list(values.keys())
+        )
         for key, value in values.items():
+            normalized_key = self.normalize_key(key)
             result = await self.set_value(
                 key=key,
                 value=value,
                 updated_by_id=updated_by_id,
+                _preloaded_setting=preloaded_settings.get(
+                    normalized_key
+                ),
+                _setting_preloaded=True,
             )
-
+            preloaded_settings[normalized_key] = result.setting
             results.append(result)
 
         return results
@@ -1084,9 +1121,20 @@ class SystemSettingRepository(
             SystemSetting
         ] = []
 
+        default_keys = [
+            definition.key
+            for definition in self.DEFAULT_SETTINGS
+        ]
+        preloaded_settings = await self.get_by_keys_for_update(
+            default_keys
+        )
+
         for definition in self.DEFAULT_SETTINGS:
-            existing = await self.get_by_key(
+            normalized_key = self.normalize_key(
                 definition.key
+            )
+            existing = preloaded_settings.get(
+                normalized_key
             )
 
             if existing is not None:
@@ -1102,7 +1150,10 @@ class SystemSettingRepository(
                 is_secret=definition.is_secret,
                 update_description=True,
                 update_category=True,
+                _preloaded_setting=None,
+                _setting_preloaded=True,
             )
+            preloaded_settings[normalized_key] = result.setting
 
             if result.was_created:
                 created_settings.append(

@@ -15,11 +15,13 @@ from typing import Any, TypeVar
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import lazyload
 
 from app.database.models.cluster import Cluster
 from app.database.models.enums import (
     AuditAction,
     EntityType,
+    UserRole,
 )
 from app.database.models.store import Store
 from app.database.models.user import User
@@ -414,12 +416,7 @@ class ClusterService:
             result.unique().all()
         )
 
-        return [
-            await self.build_cluster_view(
-                cluster
-            )
-            for cluster in clusters
-        ]
+        return await self.build_cluster_views(clusters)
 
     # ==========================================
     # СТВОРЕННЯ КЛАСТЕРА
@@ -974,6 +971,9 @@ class ClusterService:
         cluster_id: int | None,
         reason: str,
         changed_at: datetime | None = None,
+        _preloaded_store: Store | None = None,
+        _cluster_prevalidated: bool = False,
+        _manageable_bush_ids: set[int] | None = None,
     ) -> ClusterStoreAssignmentResult:
         """
         Призначає ТТ у кластер.
@@ -1000,22 +1000,30 @@ class ClusterService:
         )
 
         store = (
-            await self.get_store_or_raise(
+            _preloaded_store
+            if _preloaded_store is not None
+            else await self.get_store_or_raise(
                 store_id,
                 for_update=True,
             )
         )
+        if store.id != store_id:
+            raise ValueError(
+                "Передана інша торгова точка для призначення."
+            )
 
         decision = (
             await self.access.can_manage_store(
                 actor,
                 store.id,
+                store=store,
+                manageable_bush_ids=_manageable_bush_ids,
             )
         )
 
         decision.raise_if_denied()
 
-        if cluster_id is not None:
+        if cluster_id is not None and not _cluster_prevalidated:
             await self.get_cluster_or_raise(
                 cluster_id
             )
@@ -1146,14 +1154,55 @@ class ClusterService:
             BulkClusterAssignmentItem
         ] = []
 
+        stores_result = await self.session.scalars(
+            select(Store)
+            .options(
+                lazyload(Store.bush),
+                lazyload(Store.cluster),
+                lazyload(Store.deactivated_by),
+                lazyload(Store.user_bindings),
+                lazyload(Store.schedules),
+                lazyload(Store.schedule_exceptions),
+            )
+            .where(Store.id.in_(normalized_ids))
+            .order_by(Store.id.asc())
+            .with_for_update(of=Store)
+        )
+        stores_by_id = {
+            store.id: store
+            for store in stores_result.unique().all()
+        }
+
+        manageable_bush_ids: set[int] | None = None
+        if (
+            getattr(actor, "role", None) == UserRole.BUSH_ADMIN
+            and self.access.is_active_user(actor)
+            and not self.access.is_global_manager(actor)
+        ):
+            manageable_bush_ids = (
+                await self.repositories.bindings.get_user_bush_ids(
+                    user_id=actor.id,
+                    roles={UserRole.BUSH_ADMIN},
+                )
+            )
+
         for store_id in normalized_ids:
             try:
+                store = stores_by_id.get(store_id)
+                if store is None:
+                    raise ValueError(
+                        "Торгову точку не знайдено."
+                    )
+
                 result = await self.assign_store(
                     actor=actor,
                     store_id=store_id,
                     cluster_id=cluster_id,
                     reason=normalized_reason,
                     changed_at=now,
+                    _preloaded_store=store,
+                    _cluster_prevalidated=True,
+                    _manageable_bush_ids=manageable_bush_ids,
                 )
 
                 items.append(
@@ -1281,23 +1330,51 @@ class ClusterService:
             result.unique().all()
         )
 
-        visible: list[Store] = []
+        if self.access.is_global_manager(user):
+            return stores
 
-        for store in stores:
-            try:
-                await self.access.require_store_view(
-                    user,
-                    store.id,
+        from app.database.models.binding import (
+            UserBushBinding,
+            UserStoreBinding,
+        )
+        from app.database.models.enums import BindingStatus
+
+        bush_ids: set[int] = set()
+        if user.role in self.access.BUSH_VIEW_ROLES:
+            bush_result = await self.session.scalars(
+                select(UserBushBinding.bush_id).where(
+                    UserBushBinding.user_id == user.id,
+                    UserBushBinding.role == user.role,
+                    UserBushBinding.status == BindingStatus.APPROVED,
                 )
+            )
+            bush_ids = {
+                int(bush_id)
+                for bush_id in bush_result.all()
+            }
 
-                visible.append(
-                    store
+        store_result = await self.session.scalars(
+            select(UserStoreBinding.store_id).where(
+                UserStoreBinding.user_id == user.id,
+                UserStoreBinding.status == BindingStatus.APPROVED,
+            )
+        )
+        direct_store_ids = {
+            int(store_id)
+            for store_id in store_result.all()
+        }
+
+        return [
+            store
+            for store in stores
+            if (
+                store.id in direct_store_ids
+                or (
+                    store.bush_id is not None
+                    and store.bush_id in bush_ids
                 )
-
-            except Exception:
-                continue
-
-        return visible
+            )
+        ]
 
     # ==========================================
     # ЧАС КОНТРОЛЮ
@@ -1895,6 +1972,48 @@ class ClusterService:
     # VIEW
     # ==========================================
 
+    async def build_cluster_views(
+        self,
+        clusters: list[Cluster],
+    ) -> list[ClusterView]:
+        """Build cluster views with one batched store query."""
+        if not clusters:
+            return []
+
+        cluster_ids = {cluster.id for cluster in clusters}
+        store_result = await self.session.scalars(
+            select(Store).where(Store.cluster_id.in_(cluster_ids))
+        )
+        stores_by_cluster: dict[int, list[Store]] = {}
+        for store in store_result.unique().all():
+            if store.cluster_id is not None:
+                stores_by_cluster.setdefault(int(store.cluster_id), []).append(store)
+
+        views: list[ClusterView] = []
+        for cluster in clusters:
+            stores = stores_by_cluster.get(cluster.id, [])
+            active_count = sum(
+                bool(getattr(store, "is_active", True))
+                for store in stores
+            )
+            views.append(
+                ClusterView(
+                    id=cluster.id,
+                    name=self.cluster_name(cluster),
+                    code=self.get_text_attribute(cluster, "code", "slug"),
+                    opening_time=self.cluster_opening_time(cluster),
+                    control_deadline_minutes=self.cluster_deadline_minutes(cluster),
+                    is_active=bool(getattr(cluster, "is_active", True)),
+                    active_store_count=active_count,
+                    total_store_count=len(stores),
+                    created_at=getattr(cluster, "created_at", None),
+                    updated_at=getattr(cluster, "updated_at", None),
+                    raw_cluster=cluster,
+                )
+            )
+
+        return views
+
     async def build_cluster_view(
         self,
         cluster: Cluster,
@@ -1903,90 +2022,8 @@ class ClusterService:
         Формує ClusterView.
         """
 
-        store_statement = (
-            select(Store)
-            .where(
-                Store.cluster_id
-                == cluster.id
-            )
-        )
-
-        store_result = (
-            await self.session.scalars(
-                store_statement
-            )
-        )
-
-        stores = list(
-            store_result.unique().all()
-        )
-
-        active_count = sum(
-            bool(
-                getattr(
-                    store,
-                    "is_active",
-                    True,
-                )
-            )
-            for store in stores
-        )
-
-        return ClusterView(
-            id=cluster.id,
-
-            name=self.cluster_name(
-                cluster
-            ),
-
-            code=self.get_text_attribute(
-                cluster,
-                "code",
-                "slug",
-            ),
-
-            opening_time=(
-                self.cluster_opening_time(
-                    cluster
-                )
-            ),
-
-            control_deadline_minutes=(
-                self.cluster_deadline_minutes(
-                    cluster
-                )
-            ),
-
-            is_active=bool(
-                getattr(
-                    cluster,
-                    "is_active",
-                    True,
-                )
-            ),
-
-            active_store_count=(
-                active_count
-            ),
-
-            total_store_count=len(
-                stores
-            ),
-
-            created_at=getattr(
-                cluster,
-                "created_at",
-                None,
-            ),
-
-            updated_at=getattr(
-                cluster,
-                "updated_at",
-                None,
-            ),
-
-            raw_cluster=cluster,
-        )
+        views = await self.build_cluster_views([cluster])
+        return views[0]
 
     # ==========================================
     # SNAPSHOT
