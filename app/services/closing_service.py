@@ -37,6 +37,7 @@ from app.repositories import (
 from app.services.access import AccessService
 from app.services.group_service import (
     GroupService,
+    TelegramDestination,
     TelegramGroupScope,
     TelegramGroupTopic,
 )
@@ -1739,6 +1740,42 @@ class ClosingService:
             )
         }
 
+        summary_data_by_bush = (
+            await self.repositories.closings
+            .get_summary_data_by_bush(
+                business_date=business_date,
+                bush_ids=target_bush_ids,
+            )
+        )
+        summary_store_ids = {
+            report.store_id
+            for data in summary_data_by_bush.values()
+            for key in ("problem_reports", "waiting_reports")
+            for report in data[key]
+        }
+        summary_store_map = {
+            store.id: store
+            for store in await self.load_stores(summary_store_ids)
+        }
+        bush_chat_keys = {
+            self.groups.chat_id_key(
+                scope=TelegramGroupScope.BUSH,
+                bush_id=bush_id,
+            )
+            for bush_id in target_bush_ids
+        }
+        bush_topic_keys = {
+            self.groups.thread_key(
+                scope=TelegramGroupScope.BUSH,
+                bush_id=bush_id,
+                topic=TelegramGroupTopic.SUMMARIES,
+            )
+            for bush_id in target_bush_ids
+        }
+        bush_group_settings = await self.groups.get_int_settings(
+            bush_chat_keys | bush_topic_keys
+        )
+
         for bush_id in sorted(target_bush_ids):
             bush = None
 
@@ -1752,16 +1789,28 @@ class ClosingService:
                     )
                     continue
 
+                chat_key = self.groups.chat_id_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                )
+                thread_key = self.groups.thread_key(
+                    scope=TelegramGroupScope.BUSH,
+                    bush_id=bush.id,
+                    topic=TelegramGroupTopic.SUMMARIES,
+                )
+                bush_chat_id = bush_group_settings.get(chat_key)
+                bush_thread_id = bush_group_settings.get(thread_key)
                 bush_destination = (
-                    await self.groups
-                    .resolve_destination(
-                        topic=(
-                            TelegramGroupTopic
-                            .SUMMARIES
-                        ),
+                    TelegramDestination(
+                        chat_id=bush_chat_id,
+                        message_thread_id=bush_thread_id,
+                        scope=TelegramGroupScope.BUSH,
+                        topic=TelegramGroupTopic.SUMMARIES,
                         bush_id=bush.id,
-                        fallback_to_network=False,
+                        title=None,
                     )
+                    if bush_chat_id is not None
+                    else None
                 )
 
                 if bush_destination is None:
@@ -1780,9 +1829,9 @@ class ClosingService:
                     await self.build_bush_summary(
                         bush=bush,
                         business_date=business_date,
-                        timezone_name=(
-                            resolved_timezone
-                        ),
+                        timezone_name=resolved_timezone,
+                        summary_data=summary_data_by_bush.get(bush_id),
+                        store_map=summary_store_map,
                     )
                 )
 
@@ -1956,37 +2005,43 @@ class ClosingService:
         bush: Bush,
         business_date: date,
         timezone_name: str,
+        summary_data: dict[str, Any] | None = None,
+        store_map: dict[int, Store] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Формує вечірній підсумок куща."""
 
-        statistics = (
-            await self.repositories.closings
-            .get_daily_statistics(
-                business_date=business_date,
-                bush_id=bush.id,
+        if summary_data is None:
+            statistics = (
+                await self.repositories.closings
+                .get_daily_statistics(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        problem_reports = (
-            await self.repositories.closings
-            .get_problem_reports(
-                business_date=business_date,
-                bush_id=bush.id,
+            problem_reports = (
+                await self.repositories.closings
+                .get_problem_reports(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
-
-        waiting_reports = (
-            await self.repositories.closings
-            .get_waiting_for_date(
-                business_date=business_date,
-                bush_id=bush.id,
+            waiting_reports = (
+                await self.repositories.closings
+                .get_waiting_for_date(
+                    business_date=business_date,
+                    bush_id=bush.id,
+                )
             )
-        )
+        else:
+            statistics = summary_data["statistics"]
+            problem_reports = summary_data["problem_reports"]
+            waiting_reports = summary_data["waiting_reports"]
 
         problem_lines = (
             await self.build_report_lines(
                 problem_reports,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -1994,6 +2049,7 @@ class ClosingService:
             await self.build_report_lines(
                 waiting_reports,
                 timezone_name=timezone_name,
+                store_map=store_map,
             )
         )
 
@@ -2617,23 +2673,24 @@ class ClosingService:
         reports: list[ClosingReport],
         *,
         timezone_name: str,
+        store_map: dict[int, Store] | None = None,
     ) -> list[str]:
         """Формує короткі рядки звітів."""
 
         if not reports:
             return []
 
-        stores = await self.load_stores(
-            {
-                report.store_id
-                for report in reports
+        if store_map is None:
+            stores = await self.load_stores(
+                {
+                    report.store_id
+                    for report in reports
+                }
+            )
+            store_map = {
+                store.id: store
+                for store in stores
             }
-        )
-
-        store_map = {
-            store.id: store
-            for store in stores
-        }
 
         timezone = self.get_timezone(
             timezone_name
