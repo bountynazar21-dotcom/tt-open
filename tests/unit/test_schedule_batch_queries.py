@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
