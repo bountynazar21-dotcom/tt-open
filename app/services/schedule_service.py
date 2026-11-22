@@ -227,24 +227,21 @@ class ScheduleService:
             store_id,
         )
 
-        items: list[SchedulePreviewItem] = []
-
-        current_date = date_from
-
-        while current_date <= date_to:
-            effective_schedule = (
-                await self.repositories.schedules
-                .get_effective_schedule(
-                    store=store,
-                    business_date=current_date,
-                )
+        effective_schedules = (
+            await self.repositories.schedules
+            .get_effective_schedules_for_store_range(
+                store=store,
+                date_from=date_from,
+                date_to=date_to,
             )
+        )
 
-            weekday = current_date.weekday()
-
+        items: list[SchedulePreviewItem] = []
+        for effective_schedule in effective_schedules:
+            weekday = effective_schedule.business_date.weekday()
             items.append(
                 SchedulePreviewItem(
-                    business_date=current_date,
+                    business_date=effective_schedule.business_date,
                     weekday=weekday,
                     weekday_name=(
                         self.repositories.schedules
@@ -253,8 +250,6 @@ class ScheduleService:
                     schedule=effective_schedule,
                 )
             )
-
-            current_date += timedelta(days=1)
 
         return items
 
