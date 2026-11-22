@@ -629,9 +629,14 @@ class AccessService:
                 store_id=store_id,
             )
 
-        store = await self.get_store_or_raise(
-            store_id
-        )
+        if store is None:
+            store = await self.get_store_or_raise(
+                store_id
+            )
+        elif store.id != store_id:
+            raise ValueError(
+                "Передана інша торгова точка для перевірки доступу."
+            )
 
         if (
             user.role in self.BUSH_VIEW_ROLES
@@ -781,6 +786,8 @@ class AccessService:
         self,
         user: User,
         store_id: int,
+        *,
+        store: Store | None = None,
     ) -> AccessDecision:
         """Перевіряє управління конкретною ТТ."""
 
