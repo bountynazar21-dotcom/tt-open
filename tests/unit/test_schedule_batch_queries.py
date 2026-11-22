@@ -15,6 +15,8 @@ from app.repositories.opening import OpeningRepository
 from app.repositories.schedule import ScheduleRepository
 from app.services.group_service import GroupService
 from app.services.closing_service import ClosingService
+from app.services.bush_service import BushService
+from app.services.store_service import StoreService
 from app.services.opening_service import OpeningService
 
 
@@ -407,3 +409,48 @@ async def test_prepare_many_summaries_uses_one_locked_read_for_six_bushes() -> N
     assert session.scalars.await_count == 1
     assert session.flush.await_count == 1
     assert session.add.call_count == 6
+
+
+
+@pytest.mark.asyncio
+async def test_bulk_store_lookup_uses_one_query_for_many_codes() -> None:
+    stores = [
+        SimpleNamespace(id=store_id, code=f"TT-{store_id:03d}")
+        for store_id in range(1, 86)
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(stores))
+    )
+    service = object.__new__(StoreService)
+    service.session = session
+
+    result = await service.find_by_codes({
+        f"TT-{store_id:03d}"
+        for store_id in range(1, 86)
+    })
+
+    assert len(result) == 85
+    assert result["tt-001"].id == 1
+    assert result["tt-085"].id == 85
+    session.scalars.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bulk_bush_lookup_uses_one_query_for_names_and_codes() -> None:
+    bushes = [
+        SimpleNamespace(id=bush_id, name=f"Bush {bush_id}", code=f"B{bush_id}")
+        for bush_id in range(1, 7)
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(bushes))
+    )
+    service = object.__new__(BushService)
+    service.session = session
+
+    result = await service.find_bushes_matching(
+        names={f"bush {bush_id}" for bush_id in range(1, 7)},
+        codes={f"b{bush_id}" for bush_id in range(1, 7)},
+    )
+
+    assert [bush.id for bush in result] == [1, 2, 3, 4, 5, 6]
+    session.scalars.assert_awaited_once()
