@@ -15,6 +15,7 @@ from typing import Any, TypeVar
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import lazyload
 
 from app.database.models.cluster import Cluster
 from app.database.models.enums import (
@@ -969,6 +970,8 @@ class ClusterService:
         cluster_id: int | None,
         reason: str,
         changed_at: datetime | None = None,
+        _preloaded_store: Store | None = None,
+        _cluster_prevalidated: bool = False,
     ) -> ClusterStoreAssignmentResult:
         """
         Призначає ТТ у кластер.
@@ -995,22 +998,29 @@ class ClusterService:
         )
 
         store = (
-            await self.get_store_or_raise(
+            _preloaded_store
+            if _preloaded_store is not None
+            else await self.get_store_or_raise(
                 store_id,
                 for_update=True,
             )
         )
+        if store.id != store_id:
+            raise ValueError(
+                "Передана інша торгова точка для призначення."
+            )
 
         decision = (
             await self.access.can_manage_store(
                 actor,
                 store.id,
+                store=store,
             )
         )
 
         decision.raise_if_denied()
 
-        if cluster_id is not None:
+        if cluster_id is not None and not _cluster_prevalidated:
             await self.get_cluster_or_raise(
                 cluster_id
             )
@@ -1141,14 +1151,41 @@ class ClusterService:
             BulkClusterAssignmentItem
         ] = []
 
+        stores_result = await self.session.scalars(
+            select(Store)
+            .options(
+                lazyload(Store.bush),
+                lazyload(Store.cluster),
+                lazyload(Store.deactivated_by),
+                lazyload(Store.user_bindings),
+                lazyload(Store.schedules),
+                lazyload(Store.schedule_exceptions),
+            )
+            .where(Store.id.in_(normalized_ids))
+            .order_by(Store.id.asc())
+            .with_for_update(of=Store)
+        )
+        stores_by_id = {
+            store.id: store
+            for store in stores_result.unique().all()
+        }
+
         for store_id in normalized_ids:
             try:
+                store = stores_by_id.get(store_id)
+                if store is None:
+                    raise ValueError(
+                        "Торгову точку не знайдено."
+                    )
+
                 result = await self.assign_store(
                     actor=actor,
                     store_id=store_id,
                     cluster_id=cluster_id,
                     reason=normalized_reason,
                     changed_at=now,
+                    _preloaded_store=store,
+                    _cluster_prevalidated=True,
                 )
 
                 items.append(
