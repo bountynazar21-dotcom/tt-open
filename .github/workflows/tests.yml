@@ -10,6 +10,12 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    env:
+      BOT_TOKEN: "123456789:TEST_TOKEN_FOR_CI_ONLY"
+      BOT_USERNAME: "chikin_test_bot"
+      DATABASE_URL: "postgresql+asyncpg://test:test@localhost/test"
+      SECRET_KEY: "ci-only-secret-key-with-more-than-32-characters"
+      INVITE_TOKEN_SALT: "ci-only-invite-token-salt-with-more-than-32-characters"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
