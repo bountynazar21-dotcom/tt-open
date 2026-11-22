@@ -865,33 +865,33 @@ async def load_lion_stores(
     # -----------------------------------------------------
 
     if direct_store_ids:
-        for store_id in sorted(
-            direct_store_ids
-        ):
-            store = await load_store(
-                store_id=store_id,
-                data=data,
-            )
+        session = data.get("session") or data.get("db_session")
+        direct_stores: list[Any] = []
 
-            if store is None:
-                continue
+        if session is not None:
+            from sqlalchemy import select
+            from app.database.models.store import Store
 
-            item_bush_id = (
-                store_bush_id(
-                    store
+            result = await session.scalars(
+                select(Store).where(
+                    Store.id.in_(direct_store_ids)
                 )
             )
+            direct_stores = list(result.unique().all())
+        else:
+            for store_id in sorted(direct_store_ids):
+                store = await load_store(
+                    store_id=store_id,
+                    data=data,
+                )
+                if store is not None:
+                    direct_stores.append(store)
 
-            if (
-                item_bush_id > 0
-                and item_bush_id
-                != bush_id
-            ):
+        for store in direct_stores:
+            item_bush_id = store_bush_id(store)
+            if item_bush_id > 0 and item_bush_id != bush_id:
                 continue
-
-            stores.append(
-                store
-            )
+            stores.append(store)
 
     # -----------------------------------------------------
     # BUSH ACCESS
