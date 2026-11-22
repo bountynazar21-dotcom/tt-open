@@ -305,38 +305,59 @@ class OpeningRepository(
         self,
         plans: Iterable[OpeningPlan],
     ) -> list[OpeningCheckin]:
-        """
-        Створює відсутні ранкові записи.
-
-        Існуючі записи не змінюються.
-        """
-
-        created_records: list[
-            OpeningCheckin
-        ] = []
-
-        unique_plans: dict[
-            tuple[int, date],
-            OpeningPlan,
-        ] = {}
-
+        """Create missing opening rows with one read and one batch insert per date."""
+        plans_by_date: dict[date, dict[int, OpeningPlan]] = {}
         for plan in plans:
-            key = (
-                plan.store_id,
+            plans_by_date.setdefault(
                 plan.business_date,
-            )
+                {},
+            )[plan.store_id] = plan
 
-            unique_plans[key] = plan
-
-        for plan in unique_plans.values():
-            checkin, was_created = (
-                await self.create_from_plan(
-                    plan
+        created_records: list[OpeningCheckin] = []
+        for business_date, plans_by_store in plans_by_date.items():
+            store_ids = set(plans_by_store)
+            existing_result = await self.session.scalars(
+                select(OpeningCheckin.store_id).where(
+                    OpeningCheckin.business_date == business_date,
+                    OpeningCheckin.store_id.in_(store_ids),
                 )
             )
+            existing_ids = {
+                int(store_id)
+                for store_id in existing_result.all()
+            }
 
-            if was_created:
-                created_records.append(checkin)
+            missing_plans = [
+                plan
+                for store_id, plan in plans_by_store.items()
+                if store_id not in existing_ids
+            ]
+            if not missing_plans:
+                continue
+
+            new_records = [
+                OpeningCheckin.create_waiting(
+                    store_id=plan.store_id,
+                    business_date=plan.business_date,
+                    scheduled_open_time=plan.scheduled_open_time,
+                    control_deadline=plan.control_deadline,
+                )
+                for plan in missing_plans
+            ]
+
+            try:
+                async with self.session.begin_nested():
+                    self.session.add_all(new_records)
+                    await self.session.flush()
+                created_records.extend(new_records)
+            except IntegrityError:
+                # A concurrent scheduler may win the unique constraint.
+                # Retry only this rare conflict path with the safe
+                # per-record get-or-create implementation.
+                for plan in missing_plans:
+                    checkin, was_created = await self.create_from_plan(plan)
+                    if was_created:
+                        created_records.append(checkin)
 
         return created_records
 
