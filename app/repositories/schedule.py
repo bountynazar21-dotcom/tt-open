@@ -201,6 +201,96 @@ class ScheduleRepository:
             result.unique().all()
         )
 
+    async def upsert_weekday_schedules_many(
+        self,
+        *,
+        store_id: int,
+        items: list[dict[str, object]],
+        existing_schedules: list[StoreSchedule] | None = None,
+    ) -> list[tuple[StoreSchedule, bool]]:
+        """Creates/updates multiple weekdays after one locked read."""
+        if not items:
+            return []
+
+        normalized_items: list[dict[str, object]] = []
+        seen_weekdays: set[int] = set()
+        for item in items:
+            weekday = int(item["weekday"])
+            self.validate_weekday(weekday)
+            if weekday in seen_weekdays:
+                raise ValueError(
+                    "Пакет містить повторний день тижня."
+                )
+            seen_weekdays.add(weekday)
+            normalized = self.validate_schedule_values(
+                is_working_day=bool(item["is_working_day"]),
+                opening_time=item.get("opening_time"),
+                opening_control_deadline=item.get(
+                    "opening_control_deadline"
+                ),
+                closing_time=item.get("closing_time"),
+                closing_control_deadline=item.get(
+                    "closing_control_deadline"
+                ),
+            )
+            normalized_items.append({
+                "weekday": weekday,
+                "is_working_day": bool(item["is_working_day"]),
+                **normalized,
+            })
+
+        if existing_schedules is None:
+            existing_schedules = await self.get_weekly_schedule(
+                store_id,
+                weekdays=seen_weekdays,
+                for_update=True,
+            )
+
+        existing_by_weekday = {
+            schedule.weekday: schedule
+            for schedule in existing_schedules
+        }
+        results: list[tuple[StoreSchedule, bool]] = []
+        changed_objects: list[StoreSchedule] = []
+
+        for item in normalized_items:
+            weekday = int(item["weekday"])
+            schedule = existing_by_weekday.get(weekday)
+            was_created = schedule is None
+
+            if schedule is None:
+                schedule = StoreSchedule(
+                    store_id=store_id,
+                    weekday=weekday,
+                    is_working_day=bool(item["is_working_day"]),
+                    opening_time=item["opening_time"],
+                    opening_control_deadline=item[
+                        "opening_control_deadline"
+                    ],
+                    closing_time=item["closing_time"],
+                    closing_control_deadline=item[
+                        "closing_control_deadline"
+                    ],
+                )
+                existing_by_weekday[weekday] = schedule
+            else:
+                schedule.is_working_day = bool(item["is_working_day"])
+                schedule.opening_time = item["opening_time"]
+                schedule.opening_control_deadline = item[
+                    "opening_control_deadline"
+                ]
+                schedule.closing_time = item["closing_time"]
+                schedule.closing_control_deadline = item[
+                    "closing_control_deadline"
+                ]
+
+            changed_objects.append(schedule)
+            results.append((schedule, was_created))
+
+        self.session.add_all(changed_objects)
+        await self.session.flush()
+        return results
+
     async def upsert_weekday_schedule(
         self,
         *,
