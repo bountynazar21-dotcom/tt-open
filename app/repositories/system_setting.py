@@ -1034,13 +1034,21 @@ class SystemSettingRepository(
             SettingUpdateResult
         ] = []
 
+        preloaded_settings = await self.get_by_keys_for_update(
+            list(values.keys())
+        )
         for key, value in values.items():
+            normalized_key = self.normalize_key(key)
             result = await self.set_value(
                 key=key,
                 value=value,
                 updated_by_id=updated_by_id,
+                _preloaded_setting=preloaded_settings.get(
+                    normalized_key
+                ),
+                _setting_preloaded=True,
             )
-
+            preloaded_settings[normalized_key] = result.setting
             results.append(result)
 
         return results
@@ -1113,9 +1121,20 @@ class SystemSettingRepository(
             SystemSetting
         ] = []
 
+        default_keys = [
+            definition.key
+            for definition in self.DEFAULT_SETTINGS
+        ]
+        preloaded_settings = await self.get_by_keys_for_update(
+            default_keys
+        )
+
         for definition in self.DEFAULT_SETTINGS:
-            existing = await self.get_by_key(
+            normalized_key = self.normalize_key(
                 definition.key
+            )
+            existing = preloaded_settings.get(
+                normalized_key
             )
 
             if existing is not None:
@@ -1131,7 +1150,10 @@ class SystemSettingRepository(
                 is_secret=definition.is_secret,
                 update_description=True,
                 update_category=True,
+                _preloaded_setting=None,
+                _setting_preloaded=True,
             )
+            preloaded_settings[normalized_key] = result.setting
 
             if result.was_created:
                 created_settings.append(
