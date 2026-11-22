@@ -788,6 +788,7 @@ class AccessService:
         store_id: int,
         *,
         store: Store | None = None,
+        manageable_bush_ids: set[int] | None = None,
     ) -> AccessDecision:
         """Перевіряє управління конкретною ТТ."""
 
@@ -817,12 +818,18 @@ class AccessService:
             user.role == UserRole.BUSH_ADMIN
             and store.bush_id is not None
         ):
-            bush_decision = await self.can_manage_bush(
-                user,
-                store.bush_id,
-            )
+            if manageable_bush_ids is None:
+                bush_decision = await self.can_manage_bush(
+                    user,
+                    store.bush_id,
+                )
+                has_bush_access = bush_decision.allowed
+            else:
+                has_bush_access = (
+                    store.bush_id in manageable_bush_ids
+                )
 
-            if bush_decision.allowed:
+            if has_bush_access:
                 return self.allow(
                     permission,
                     "Адміністратор керує кущем цієї ТТ.",
