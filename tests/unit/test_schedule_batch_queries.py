@@ -912,3 +912,61 @@ async def test_settings_set_many_preloads_rows_in_one_query() -> None:
     assert service.set_setting.await_args_list[1].kwargs[
         "_setting_preloaded"
     ] is True
+
+
+
+@pytest.mark.asyncio
+async def test_weekly_schedule_upsert_batches_all_seven_days() -> None:
+    existing = [
+        SimpleNamespace(
+            store_id=42,
+            weekday=0,
+            is_working_day=True,
+            opening_time=time(9, 0),
+            opening_control_deadline=time(9, 10),
+            closing_time=time(21, 0),
+            closing_control_deadline=time(21, 10),
+        ),
+        SimpleNamespace(
+            store_id=42,
+            weekday=1,
+            is_working_day=True,
+            opening_time=time(9, 0),
+            opening_control_deadline=time(9, 10),
+            closing_time=time(21, 0),
+            closing_control_deadline=time(21, 10),
+        ),
+    ]
+    session = SimpleNamespace(
+        add_all=Mock(),
+        flush=AsyncMock(),
+    )
+    repository = object.__new__(ScheduleRepository)
+    repository.session = session
+
+    items = [
+        {
+            "weekday": weekday,
+            "is_working_day": True,
+            "opening_time": time(9, 0),
+            "opening_control_deadline": time(9, 10),
+            "closing_time": time(21, 0),
+            "closing_control_deadline": time(21, 10),
+        }
+        for weekday in range(7)
+    ]
+
+    result = await repository.upsert_weekday_schedules_many(
+        store_id=42,
+        items=items,
+        existing_schedules=existing,
+    )
+
+    assert len(result) == 7
+    assert [created for _, created in result] == [
+        False, False, True, True, True, True, True
+    ]
+    assert [schedule.weekday for schedule, _ in result] == list(range(7))
+    session.add_all.assert_called_once()
+    assert len(session.add_all.call_args.args[0]) == 7
+    session.flush.assert_awaited_once()
