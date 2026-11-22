@@ -1353,10 +1353,7 @@ class ClosingService:
                         store=store,
                         report=report,
                         queued_at=current_time,
-                        recipients=recipients_by_store.get(
-                            store.id,
-                            [],
-                        ),
+                        recipients=recipients_by_store.get(store.id),
                     )
                 )
 
