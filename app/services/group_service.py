@@ -1516,6 +1516,37 @@ class GroupService:
 
         return normalized or None
 
+    async def get_int_settings(
+        self,
+        keys: set[str] | list[str] | tuple[str, ...],
+    ) -> dict[str, int]:
+        """Читає набір числових налаштувань одним SQL-запитом."""
+
+        normalized_keys = {
+            self.normalize_setting_key(key)
+            for key in keys
+            if key
+        }
+        if not normalized_keys:
+            return {}
+
+        key_column = self.setting_key_column()
+        result = await self.session.scalars(
+            select(SystemSetting).where(
+                key_column.in_(normalized_keys)
+            )
+        )
+        values: dict[str, int] = {}
+        for setting in result.unique().all():
+            raw_value = self.setting_value(setting)
+            if raw_value is None:
+                continue
+            try:
+                values[str(getattr(setting, key_column.key))] = int(str(raw_value).strip())
+            except (TypeError, ValueError):
+                continue
+        return values
+
     async def get_int_setting(
         self,
         key: str,
