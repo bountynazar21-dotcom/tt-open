@@ -9,11 +9,14 @@ from typing import Any, TypeVar
 
 from sqlalchemy import func, select
 
+from app.database.models.binding import UserBushBinding
 from app.database.models.bush import Bush
 from app.database.models.enums import (
     AuditAction,
+    BindingStatus,
     EntityType,
     UserRole,
+    UserStatus,
 )
 from app.database.models.store import Store
 from app.database.models.user import User
@@ -321,10 +324,7 @@ class BushService:
             result.unique().all()
         )
 
-        return [
-            await self.build_bush_view(bush)
-            for bush in bushes
-        ]
+        return await self.build_bush_views(bushes)
 
     # ==========================================
     # ПОШУК КУЩІВ
@@ -430,11 +430,7 @@ class BushService:
             statement
         )
 
-        return [
-            await self.build_bush_view(bush)
-            for bush
-            in result.unique().all()
-        ]
+        return await self.build_bush_views(list(result.unique().all()))
 
     # ==========================================
     # СТВОРЕННЯ
@@ -1777,6 +1773,85 @@ class BushService:
     # ==========================================
     # BUSH VIEW
     # ==========================================
+
+    async def build_bush_views(
+        self,
+        bushes: list[Bush],
+    ) -> list[BushView]:
+        """Build bush views with batched store and binding statistics."""
+        if not bushes:
+            return []
+
+        bush_ids = {bush.id for bush in bushes}
+        store_result = await self.session.scalars(
+            select(Store).where(Store.bush_id.in_(bush_ids))
+        )
+        stores_by_bush: dict[int, list[Store]] = {}
+        for store in store_result.unique().all():
+            if store.bush_id is not None:
+                stores_by_bush.setdefault(int(store.bush_id), []).append(store)
+
+        binding_result = await self.session.execute(
+            select(
+                UserBushBinding.bush_id,
+                UserBushBinding.role,
+                func.count(UserBushBinding.id),
+            )
+            .join(User, User.id == UserBushBinding.user_id)
+            .where(
+                UserBushBinding.bush_id.in_(bush_ids),
+                UserBushBinding.status == BindingStatus.APPROVED,
+                UserBushBinding.role.in_({
+                    UserRole.BUSH_ADMIN,
+                    UserRole.LION,
+                }),
+                User.status == UserStatus.ACTIVE,
+                User.is_blocked.is_(False),
+            )
+            .group_by(
+                UserBushBinding.bush_id,
+                UserBushBinding.role,
+            )
+        )
+        user_counts: dict[int, dict[UserRole, int]] = {}
+        for bush_id, role, count in binding_result.all():
+            user_counts.setdefault(int(bush_id), {})[role] = int(count or 0)
+
+        views: list[BushView] = []
+        for bush in bushes:
+            stores = stores_by_bush.get(bush.id, [])
+            active_stores = [
+                store
+                for store in stores
+                if bool(getattr(store, "is_active", True))
+            ]
+            cities = sorted({
+                city
+                for store in stores
+                if (
+                    city := self.get_text_attribute(store, "city")
+                )
+            })
+            counts = user_counts.get(bush.id, {})
+
+            views.append(
+                BushView(
+                    id=bush.id,
+                    name=self.bush_name(bush),
+                    code=self.get_text_attribute(bush, "code", "slug"),
+                    description=self.get_text_attribute(bush, "description"),
+                    is_active=bool(getattr(bush, "is_active", True)),
+                    active_store_count=len(active_stores),
+                    total_store_count=len(stores),
+                    bush_admin_count=counts.get(UserRole.BUSH_ADMIN, 0),
+                    lion_count=counts.get(UserRole.LION, 0),
+                    created_at=getattr(bush, "created_at", None),
+                    updated_at=getattr(bush, "updated_at", None),
+                    raw_bush=bush,
+                )
+            )
+
+        return views
 
     async def build_bush_view(
         self,
