@@ -840,6 +840,44 @@ class BindingRepository:
     # ПРИВ’ЯЗКИ ДО КУЩІВ
     # ==========================================
 
+    async def get_bush_bindings_for_users(
+        self,
+        *,
+        user_ids: set[int],
+        bush_id: int,
+        role: UserRole,
+        for_update: bool = False,
+    ) -> dict[int, UserBushBinding]:
+        """Loads and optionally locks one bush role binding per user in one query."""
+        if not user_ids:
+            return {}
+
+        self.validate_bush_role(role)
+        statement = (
+            select(UserBushBinding)
+            .where(
+                UserBushBinding.user_id.in_(user_ids),
+                UserBushBinding.bush_id == bush_id,
+                UserBushBinding.role == role,
+            )
+            .order_by(
+                UserBushBinding.id.asc()
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(
+                of=UserBushBinding
+            )
+
+        result = await self.session.scalars(statement)
+        bindings_by_user: dict[int, UserBushBinding] = {}
+        for binding in result.unique().all():
+            bindings_by_user.setdefault(
+                int(binding.user_id),
+                binding,
+            )
+        return bindings_by_user
+
     async def get_bush_binding(
         self,
         *,
