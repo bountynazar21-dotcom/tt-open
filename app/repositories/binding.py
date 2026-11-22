@@ -646,6 +646,48 @@ class BindingRepository:
             result.unique().all()
         )
 
+    async def get_users_for_stores(
+        self,
+        store_ids: set[int] | list[int] | tuple[int, ...],
+        *,
+        active_only: bool = True,
+    ) -> list[User]:
+        """Return users bound to any of the supplied stores in one query."""
+        normalized_ids = {
+            int(store_id)
+            for store_id in store_ids
+            if int(store_id) > 0
+        }
+        if not normalized_ids:
+            return []
+
+        conditions = [
+            UserStoreBinding.store_id.in_(normalized_ids),
+            UserStoreBinding.status == BindingStatus.APPROVED,
+        ]
+        if active_only:
+            conditions.extend(
+                [
+                    User.status == UserStatus.ACTIVE,
+                    User.is_blocked.is_(False),
+                ]
+            )
+
+        statement = (
+            select(User)
+            .join(
+                UserStoreBinding,
+                UserStoreBinding.user_id == User.id,
+            )
+            .where(*conditions)
+            .order_by(
+                User.full_name.asc(),
+                User.id.asc(),
+            )
+        )
+        result = await self.session.scalars(statement)
+        return list(result.unique().all())
+
     async def user_has_store_access(
         self,
         *,
