@@ -926,16 +926,33 @@ async def load_lion_stores(
         Any,
     ] = {}
 
-    for item in stores:
-        if isinstance(
-            item,
-            int,
-        ):
-            store = await load_store(
-                store_id=item,
-                data=data,
-            )
+    unresolved_ids = {
+        item
+        for item in stores
+        if isinstance(item, int)
+    }
+    stores_by_id: dict[int, Any] = {}
+    session = data.get("session") or data.get("db_session")
+    if unresolved_ids and session is not None:
+        from sqlalchemy import select
+        from app.database.models.store import Store
 
+        store_result = await session.scalars(
+            select(Store).where(Store.id.in_(unresolved_ids))
+        )
+        stores_by_id = {
+            int(store.id): store
+            for store in store_result.unique().all()
+        }
+
+    for item in stores:
+        if isinstance(item, int):
+            store = stores_by_id.get(item)
+            if store is None and session is None:
+                store = await load_store(
+                    store_id=item,
+                    data=data,
+                )
         else:
             store = item
 
