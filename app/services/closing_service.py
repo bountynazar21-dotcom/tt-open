@@ -1890,7 +1890,7 @@ class ClosingService:
                         items=bush_summary_items,
                     )
                 )
-            except Exception as batch_error:
+            except Exception:
                 # Keep the old per-bush failure isolation if the batch write fails.
                 for item, (bush_id, bush_name) in zip(
                     bush_summary_items,
