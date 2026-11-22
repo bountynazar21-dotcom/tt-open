@@ -1276,23 +1276,51 @@ class ClusterService:
             result.unique().all()
         )
 
-        visible: list[Store] = []
+        if self.access.is_global_manager(user):
+            return stores
 
-        for store in stores:
-            try:
-                await self.access.require_store_view(
-                    user,
-                    store.id,
+        from app.database.models.binding import (
+            UserBushBinding,
+            UserStoreBinding,
+        )
+        from app.database.models.enums import BindingStatus
+
+        bush_ids: set[int] = set()
+        if user.role in self.access.BUSH_VIEW_ROLES:
+            bush_result = await self.session.scalars(
+                select(UserBushBinding.bush_id).where(
+                    UserBushBinding.user_id == user.id,
+                    UserBushBinding.role == user.role,
+                    UserBushBinding.status == BindingStatus.APPROVED,
                 )
+            )
+            bush_ids = {
+                int(bush_id)
+                for bush_id in bush_result.all()
+            }
 
-                visible.append(
-                    store
+        store_result = await self.session.scalars(
+            select(UserStoreBinding.store_id).where(
+                UserStoreBinding.user_id == user.id,
+                UserStoreBinding.status == BindingStatus.APPROVED,
+            )
+        )
+        direct_store_ids = {
+            int(store_id)
+            for store_id in store_result.all()
+        }
+
+        return [
+            store
+            for store in stores
+            if (
+                store.id in direct_store_ids
+                or (
+                    store.bush_id is not None
+                    and store.bush_id in bush_ids
                 )
-
-            except Exception:
-                continue
-
-        return visible
+            )
+        ]
 
     # ==========================================
     # ЧАС КОНТРОЛЮ
