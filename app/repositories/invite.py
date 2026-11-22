@@ -1319,28 +1319,46 @@ class InviteRepository:
             field_name="now",
         )
 
-        counts: dict[InviteStatus, int] = {}
+        revoked_conditions = self.build_status_conditions(
+            status=InviteStatus.REVOKED,
+            now=current_time,
+        )
+        used_up_conditions = self.build_status_conditions(
+            status=InviteStatus.USED_UP,
+            now=current_time,
+        )
+        expired_conditions = self.build_status_conditions(
+            status=InviteStatus.EXPIRED,
+            now=current_time,
+        )
+        active_conditions = self.build_status_conditions(
+            status=InviteStatus.ACTIVE,
+            now=current_time,
+        )
 
-        for status in InviteStatus:
-            statement = (
-                select(
-                    func.count(InviteLink.id)
-                )
-                .where(
-                    *self.build_status_conditions(
-                        status=status,
-                        now=current_time,
-                    )
-                )
-            )
+        statement = select(
+            func.count(InviteLink.id)
+            .filter(*revoked_conditions)
+            .label("revoked"),
+            func.count(InviteLink.id)
+            .filter(*used_up_conditions)
+            .label("used_up"),
+            func.count(InviteLink.id)
+            .filter(*expired_conditions)
+            .label("expired"),
+            func.count(InviteLink.id)
+            .filter(*active_conditions)
+            .label("active"),
+        )
+        result = await self.session.execute(statement)
+        revoked, used_up, expired, active = result.one()
 
-            result = await self.session.scalar(
-                statement
-            )
-
-            counts[status] = int(result or 0)
-
-        return counts
+        return {
+            InviteStatus.REVOKED: int(revoked or 0),
+            InviteStatus.USED_UP: int(used_up or 0),
+            InviteStatus.EXPIRED: int(expired or 0),
+            InviteStatus.ACTIVE: int(active or 0),
+        }
 
     async def count_usages(
         self,
