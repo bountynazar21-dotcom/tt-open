@@ -11,6 +11,7 @@ from app.database.models.daily_summary import DailySummaryMessage
 from app.database.models.enums import SummaryType
 from app.repositories.daily_summary import DailySummaryRepository
 from app.repositories.binding import BindingRepository
+from app.repositories.system_setting import SystemSettingRepository
 from app.repositories.closing import ClosingRepository
 from app.repositories.opening import OpeningRepository
 from app.repositories.schedule import ScheduleRepository
@@ -20,6 +21,7 @@ from app.services.bush_service import BushService
 from app.services.binding_service import BindingService
 from app.services.cluster_service import ClusterService
 from app.services.store_service import StoreService
+from app.services.settings_service import SettingsService
 from app.services.opening_service import OpeningService
 
 
@@ -835,3 +837,78 @@ async def test_bulk_store_assignment_preloads_users_and_bindings(
         assert call.kwargs["_preloaded_binding"] is bindings_by_user[user.id]
         assert call.kwargs["_preloaded_binding_loaded"] is True
         assert call.kwargs["_store_access_prevalidated"] is True
+
+
+
+@pytest.mark.asyncio
+async def test_get_by_keys_for_update_uses_one_query() -> None:
+    settings = [
+        SimpleNamespace(key=f"setting_{index}")
+        for index in range(1, 51)
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(settings))
+    )
+    repository = object.__new__(SystemSettingRepository)
+    repository.session = session
+
+    result = await repository.get_by_keys_for_update(
+        [setting.key for setting in settings]
+    )
+
+    assert len(result) == 50
+    assert result["setting_25"] is settings[24]
+    session.scalars.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_settings_set_many_preloads_rows_in_one_query() -> None:
+    existing_setting = SimpleNamespace(key="setting_1")
+    settings_repository = SimpleNamespace(
+        get_by_keys_for_update=AsyncMock(
+            return_value={"setting_1": existing_setting}
+        ),
+        normalize_key=lambda value: str(value).strip().lower(),
+    )
+    service = object.__new__(SettingsService)
+    service.access = SimpleNamespace(
+        require_settings_management=Mock()
+    )
+    service.repositories = SimpleNamespace(
+        settings=settings_repository
+    )
+    results_by_key = {
+        "setting_1": SimpleNamespace(
+            setting=existing_setting,
+            was_changed=True,
+            was_created=False,
+        ),
+        "setting_2": SimpleNamespace(
+            setting=SimpleNamespace(key="setting_2"),
+            was_changed=False,
+            was_created=True,
+        ),
+    }
+    service.set_setting = AsyncMock(
+        side_effect=lambda **kwargs: results_by_key[kwargs["key"]]
+    )
+
+    result = await service.set_many(
+        actor=SimpleNamespace(id=1),
+        values={"setting_1": 10, "setting_2": 20},
+        reason="bulk setting test",
+    )
+
+    assert result.changed_count == 1
+    assert result.unchanged_count == 1
+    assert result.created_count == 1
+    settings_repository.get_by_keys_for_update.assert_awaited_once_with(
+        ["setting_1", "setting_2"]
+    )
+    assert service.set_setting.await_count == 2
+    assert service.set_setting.await_args_list[0].kwargs[
+        "_preloaded_setting"
+    ] is existing_setting
+    assert service.set_setting.await_args_list[1].kwargs[
+        "_setting_preloaded"
+    ] is True
