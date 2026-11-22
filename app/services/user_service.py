@@ -9,10 +9,13 @@ from typing import Any, TypeVar
 
 from sqlalchemy import func, or_, select
 
+from app.database.models.binding import UserBushBinding, UserStoreBinding
 from app.database.models.bush import Bush
 from app.database.models.enums import (
     AuditAction,
     EntityType,
+    BindingStatus,
+    StoreStatus,
     UserRole,
     UserStatus,
 )
@@ -806,6 +809,128 @@ class UserService:
 
         return await self.get_access_internal(
             target
+        )
+
+    async def get_access_internal_many(
+        self,
+        users: list[User],
+    ) -> tuple[
+        dict[int, UserAccessView],
+        dict[int, set[int]],
+    ]:
+        """Load access scopes for a user list with two batched queries."""
+        unique_users = {
+            user.id: user
+            for user in users
+        }
+        non_global_ids = {
+            user_id
+            for user_id, user in unique_users.items()
+            if not self.is_global_role(user.role)
+        }
+
+        store_rows_by_user: dict[int, list[Store]] = {}
+        bush_rows_by_user: dict[int, list[Bush]] = {}
+
+        if non_global_ids:
+            store_result = await self.session.execute(
+                select(UserStoreBinding.user_id, Store)
+                .join(Store, Store.id == UserStoreBinding.store_id)
+                .where(
+                    UserStoreBinding.user_id.in_(non_global_ids),
+                    UserStoreBinding.status == BindingStatus.APPROVED,
+                    Store.is_active.is_(True),
+                    Store.status == StoreStatus.ACTIVE,
+                )
+            )
+            for user_id, store in store_result.all():
+                store_rows_by_user.setdefault(int(user_id), []).append(store)
+
+            bush_result = await self.session.execute(
+                select(UserBushBinding.user_id, Bush)
+                .join(Bush, Bush.id == UserBushBinding.bush_id)
+                .where(
+                    UserBushBinding.user_id.in_(non_global_ids),
+                    UserBushBinding.status == BindingStatus.APPROVED,
+                    Bush.is_active.is_(True),
+                )
+            )
+            for user_id, bush in bush_result.all():
+                bush_rows_by_user.setdefault(int(user_id), []).append(bush)
+
+        access_by_user: dict[int, UserAccessView] = {}
+        store_bush_ids_by_user: dict[int, set[int]] = {}
+
+        for user_id, user in unique_users.items():
+            if self.is_global_role(user.role):
+                access_by_user[user_id] = UserAccessView(
+                    user_id=user_id,
+                    store_ids=(),
+                    bush_ids=(),
+                    store_codes=(),
+                    bush_names=(),
+                    has_network_access=True,
+                )
+                store_bush_ids_by_user[user_id] = set()
+                continue
+
+            stores = store_rows_by_user.get(user_id, [])
+            bushes = bush_rows_by_user.get(user_id, [])
+            stores.sort(
+                key=lambda store: (
+                    self.store_number(store) or 999999,
+                    store.id,
+                )
+            )
+            bushes.sort(
+                key=lambda bush: (
+                    self.bush_name(bush).lower(),
+                    bush.id,
+                )
+            )
+
+            store_ids = tuple(store.id for store in stores)
+            bush_ids = tuple(bush.id for bush in bushes)
+            access_by_user[user_id] = UserAccessView(
+                user_id=user_id,
+                store_ids=store_ids,
+                bush_ids=bush_ids,
+                store_codes=tuple(self.store_code(store) for store in stores),
+                bush_names=tuple(self.bush_name(bush) for bush in bushes),
+                has_network_access=False,
+            )
+            store_bush_ids_by_user[user_id] = {
+                int(store.bush_id)
+                for store in stores
+                if store.bush_id is not None
+            }
+
+        return access_by_user, store_bush_ids_by_user
+
+    def can_view_user_from_access(
+        self,
+        *,
+        actor: User,
+        target: User,
+        actor_access: UserAccessView | None,
+        target_access: UserAccessView,
+        target_store_bush_ids: set[int],
+    ) -> bool:
+        """Apply the same visibility rules as ensure_can_view_user."""
+        if actor.id == target.id or self.is_global_role(actor.role):
+            return True
+
+        if actor_access is None:
+            return False
+
+        if set(target_access.store_ids).intersection(actor_access.store_ids):
+            return True
+
+        if set(target_access.bush_ids).intersection(actor_access.bush_ids):
+            return True
+
+        return bool(
+            target_store_bush_ids.intersection(actor_access.bush_ids)
         )
 
     async def get_access_internal(
