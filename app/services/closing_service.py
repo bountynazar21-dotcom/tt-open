@@ -1551,6 +1551,7 @@ class ClosingService:
                     User.status == UserStatus.ACTIVE,
                     User.is_blocked.is_(False),
                 )
+                .order_by(User.role.asc(), User.full_name.asc())
             )
             for bush_id, user in result.all():
                 recipients_by_bush.setdefault(
