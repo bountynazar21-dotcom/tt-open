@@ -348,6 +348,85 @@ class ScheduleService:
             current_values=current_values,
         )
 
+    async def set_store_weekdays(
+        self,
+        *,
+        actor: User,
+        store_id: int,
+        items: list[dict[str, Any]],
+        reason: str | None = None,
+    ) -> list[WeekdayScheduleChangeResult]:
+        """Updates several weekdays with one locked read and one flush."""
+        if not items:
+            return []
+
+        store = await self.access.require_schedule_management(
+            actor,
+            store_id,
+        )
+        weekdays = {
+            int(item["weekday"])
+            for item in items
+        }
+        for weekday in weekdays:
+            self.repositories.schedules.validate_weekday(
+                weekday
+            )
+
+        previous_schedules = (
+            await self.repositories.schedules
+            .get_weekly_schedule(
+                store_id=store.id,
+                weekdays=weekdays,
+                for_update=True,
+            )
+        )
+        previous_by_weekday = {
+            schedule.weekday: self.weekday_schedule_snapshot(
+                schedule
+            )
+            for schedule in previous_schedules
+        }
+
+        schedules = (
+            await self.repositories.schedules
+            .upsert_weekday_schedules_many(
+                store_id=store.id,
+                items=items,
+                existing_schedules=previous_schedules,
+            )
+        )
+
+        results: list[WeekdayScheduleChangeResult] = []
+        for schedule, was_created in schedules:
+            previous_values = previous_by_weekday.get(
+                schedule.weekday,
+                {},
+            )
+            current_values = self.weekday_schedule_snapshot(
+                schedule
+            )
+            await self.log_weekday_change(
+                actor=actor,
+                store=store,
+                schedule=schedule,
+                previous_values=previous_values,
+                current_values=current_values,
+                reason=reason,
+                was_created=was_created,
+            )
+            results.append(
+                WeekdayScheduleChangeResult(
+                    store=store,
+                    schedule=schedule,
+                    was_created=was_created,
+                    previous_values=previous_values,
+                    current_values=current_values,
+                )
+            )
+
+        return results
+
     async def set_store_day_off(
         self,
         *,
