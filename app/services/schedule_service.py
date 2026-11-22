@@ -423,26 +423,18 @@ class ScheduleService:
             set(target_weekdays)
         )
 
-        previous_snapshots: dict[
-            int,
-            dict[str, Any],
-        ] = {}
-
-        for weekday in normalized_targets:
-            previous = (
-                await self.repositories.schedules
-                .get_weekday_schedule(
-                    store_id=store.id,
-                    weekday=weekday,
-                    for_update=True,
-                )
+        previous_schedules = (
+            await self.repositories.schedules
+            .get_weekly_schedule(
+                store_id=store.id,
+                weekdays=set(normalized_targets),
+                for_update=True,
             )
-
-            previous_snapshots[weekday] = (
-                self.weekday_schedule_snapshot(
-                    previous
-                )
-            )
+        )
+        previous_snapshots = {
+            schedule.weekday: self.weekday_schedule_snapshot(schedule)
+            for schedule in previous_schedules
+        }
 
         schedules = (
             await self.repositories.schedules
