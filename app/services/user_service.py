@@ -887,7 +887,11 @@ class UserService:
                 continue
 
             stores = store_rows_by_user.get(user_id, [])
-            bushes = bush_rows_by_user.get(user_id, [])
+            bushes_by_id = {
+                bush.id: bush
+                for bush in bush_rows_by_user.get(user_id, [])
+            }
+            bushes = list(bushes_by_id.values())
             stores.sort(
                 key=lambda store: (
                     self.store_number(store) or 999999,
