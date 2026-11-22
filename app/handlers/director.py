@@ -1058,60 +1058,70 @@ async def query_bush_users(
                         user_id
                     ] = item
 
-        get_store_users = getattr(
+        bush_stores = []
+        try:
+            bush_stores = await load_bush_stores(
+                bush_id=bush_id,
+                data=data,
+            )
+        except Exception:
+            logger.exception(
+                "Failed loading stores for bush users | bush_id=%s",
+                bush_id,
+            )
+
+        store_ids = {
+            to_int(first_attr(store, "id", "store_id", default=0))
+            for store in bush_stores
+        }
+        store_ids.discard(0)
+
+        get_users_for_stores = getattr(
             bindings_repository,
-            "get_users_for_store",
+            "get_users_for_stores",
             None,
         )
-
-        if callable(get_store_users):
+        if callable(get_users_for_stores) and store_ids:
             try:
-                bush_stores = (
-                    await load_bush_stores(
-                        bush_id=bush_id,
-                        data=data,
-                    )
+                store_users = await get_users_for_stores(
+                    store_ids,
+                    active_only=False,
                 )
             except Exception:
-                bush_stores = []
-
-            for store in bush_stores:
-                store_id = to_int(
-                    first_attr(
-                        store,
-                        "id",
-                        "store_id",
-                        default=0,
-                    )
+                logger.exception(
+                    "Batch store-user lookup failed | bush_id=%s",
+                    bush_id,
                 )
+                store_users = []
 
-                if store_id <= 0:
-                    continue
-
-                try:
-                    store_users = (
-                        await get_store_users(
+            for item in store_users:
+                user_id = to_int(
+                    first_attr(item, "id", "user_id", default=0)
+                )
+                if user_id > 0:
+                    users_by_id[user_id] = item
+        else:
+            get_store_users = getattr(
+                bindings_repository,
+                "get_users_for_store",
+                None,
+            )
+            if callable(get_store_users):
+                for store_id in sorted(store_ids):
+                    try:
+                        store_users = await get_store_users(
                             store_id,
                             active_only=False,
                         )
-                    )
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
 
-                for item in store_users:
-                    user_id = to_int(
-                        first_attr(
-                            item,
-                            "id",
-                            "user_id",
-                            default=0,
+                    for item in store_users:
+                        user_id = to_int(
+                            first_attr(item, "id", "user_id", default=0)
                         )
-                    )
-
-                    if user_id > 0:
-                        users_by_id[
-                            user_id
-                        ] = item
+                        if user_id > 0:
+                            users_by_id[user_id] = item
 
         if users_by_id:
             return list(
