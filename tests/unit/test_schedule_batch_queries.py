@@ -10,6 +10,7 @@ from app.database.models.enums import ClosingStatus, OpeningStatus, StoreStatus,
 from app.database.models.daily_summary import DailySummaryMessage
 from app.database.models.enums import SummaryType
 from app.repositories.daily_summary import DailySummaryRepository
+from app.repositories.binding import BindingRepository
 from app.repositories.closing import ClosingRepository
 from app.repositories.opening import OpeningRepository
 from app.repositories.schedule import ScheduleRepository
@@ -508,3 +509,74 @@ async def test_bulk_cluster_assignment_locks_all_stores_in_one_query(
     ):
         assert call.kwargs["_preloaded_store"] is store
         assert call.kwargs["_cluster_prevalidated"] is True
+
+
+
+@pytest.mark.asyncio
+async def test_user_bush_access_ids_are_loaded_in_one_query() -> None:
+    session = SimpleNamespace(
+        scalars=AsyncMock(
+            return_value=FakeScalarResult([2, 4, 6, 8])
+        )
+    )
+    repository = object.__new__(BindingRepository)
+    repository.session = session
+
+    result = await repository.get_user_bush_ids(
+        user_id=99,
+        roles={UserRole.BUSH_ADMIN},
+    )
+
+    assert result == {2, 4, 6, 8}
+    session.scalars.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bulk_cluster_assignment_preloads_bush_permissions_once() -> None:
+    stores = [
+        SimpleNamespace(id=store_id, bush_id=(store_id % 6) + 1, cluster_id=None)
+        for store_id in range(1, 86)
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(stores))
+    )
+    bindings = SimpleNamespace(
+        get_user_bush_ids=AsyncMock(return_value={1, 2, 3, 4, 5, 6})
+    )
+    service = object.__new__(ClusterService)
+    service.session = session
+    service.repositories = SimpleNamespace(bindings=bindings)
+    service.access = SimpleNamespace(
+        is_active_user=Mock(return_value=True),
+        is_global_manager=Mock(return_value=False),
+    )
+    service.get_cluster_or_raise = AsyncMock(
+        return_value=SimpleNamespace(id=7, is_active=True)
+    )
+    service.assign_store = AsyncMock(
+        side_effect=[
+            SimpleNamespace(
+                was_changed=True,
+                previous_cluster_id=None,
+                current_cluster_id=7,
+            )
+            for _ in stores
+        ]
+    )
+
+    await service.bulk_assign_stores(
+        actor=SimpleNamespace(id=99, role=UserRole.BUSH_ADMIN),
+        store_ids=[store.id for store in stores],
+        cluster_id=7,
+        reason="bulk assignment test",
+    )
+
+    bindings.get_user_bush_ids.assert_awaited_once_with(
+        user_id=99,
+        roles={UserRole.BUSH_ADMIN},
+    )
+    assert service.assign_store.await_count == 85
+    assert all(
+        call.kwargs["_manageable_bush_ids"] == {1, 2, 3, 4, 5, 6}
+        for call in service.assign_store.await_args_list
+    )
