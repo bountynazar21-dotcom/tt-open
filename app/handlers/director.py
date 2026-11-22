@@ -649,9 +649,11 @@ async def _prime_bush_status_cache(
     ):
         return
 
+    repositories = data.get("repositories")
     session = (
         data.get("session")
         or data.get("db_session")
+        or getattr(repositories, "session", None)
     )
 
     if session is None:
