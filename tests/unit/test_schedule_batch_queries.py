@@ -1013,3 +1013,25 @@ async def test_imported_schedule_reuses_preloaded_deadline_settings() -> None:
     assert payload["items"][0]["closing_control_deadline"] == time(21, 15)
     assert payload["items"][5]["opening_control_deadline"] == time(10, 10)
     assert payload["items"][6]["closing_control_deadline"] == time(19, 15)
+
+
+
+@pytest.mark.asyncio
+async def test_director_bush_cache_negatively_caches_missing_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.handlers import root_admin
+
+    load_bush = AsyncMock()
+    monkeypatch.setattr(root_admin, "load_bush", load_bush)
+
+    result = await root_admin.store_bush_name(
+        store=SimpleNamespace(bush_id=777),
+        data={
+            "_director_bush_cache_ready": True,
+            "_director_bush_by_id": {},
+        },
+    )
+
+    assert result == "Кущ #777"
+    load_bush.assert_not_awaited()
