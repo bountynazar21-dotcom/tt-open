@@ -815,16 +815,17 @@ async def _prime_director_bush_cache(
     data: dict[str, Any],
 ) -> None:
     """Bulk-load bush names used by a Director store list."""
-    if data.get("_director_bush_cache_ready"):
-        return
-
     bush_ids = {
         store_bush_id(store)
         for store in stores
         if store_bush_id(store) > 0
     }
-    if not bush_ids:
-        data["_director_bush_by_id"] = {}
+    cached_bushes = data.setdefault(
+        "_director_bush_by_id",
+        {},
+    )
+    missing_ids = bush_ids - set(cached_bushes)
+    if not missing_ids:
         data["_director_bush_cache_ready"] = True
         return
 
@@ -837,17 +838,17 @@ async def _prime_director_bush_cache(
 
     try:
         result = await session.scalars(
-            select(Bush).where(Bush.id.in_(bush_ids))
+            select(Bush).where(Bush.id.in_(missing_ids))
         )
         bushes = list(result.unique().all())
     except Exception:
         logger.exception("Director bulk bush preload failed")
         return
 
-    data["_director_bush_by_id"] = {
+    cached_bushes.update({
         int(bush.id): bush
         for bush in bushes
-    }
+    })
     data["_director_bush_cache_ready"] = True
 
 
@@ -872,6 +873,11 @@ async def store_bush_name(
             "_director_bush_by_id",
             {},
         ).get(bush_id)
+        if bush is None:
+            bush = await load_bush(
+                bush_id=bush_id,
+                data=data,
+            )
     else:
         bush = await load_bush(
             bush_id=bush_id,
