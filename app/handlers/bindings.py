@@ -837,6 +837,8 @@ async def binding_target_label(
     *,
     binding: Any,
     data: dict[str, Any],
+    store_map: dict[int, Any] | None = None,
+    bush_map: dict[int, Any] | None = None,
 ) -> str:
     """
     Назва ТТ / куща.
@@ -860,15 +862,16 @@ async def binding_target_label(
     )
 
     if direct:
-        return str(
-            direct
-        )
+        return str(direct)
 
     if scope == "store":
-        store = await load_store(
-            store_id=target_id,
-            data=data,
-        )
+        if store_map is None:
+            store = await load_store(
+                store_id=target_id,
+                data=data,
+            )
+        else:
+            store = store_map.get(target_id)
 
         return store_title(
             store,
@@ -876,22 +879,16 @@ async def binding_target_label(
         )
 
     if scope == "bush":
-        bushes = await query_network_bushes(
-            data=data
-        )
-
-        bush = next(
-            (
-                item
+        if bush_map is None:
+            bushes = await query_network_bushes(
+                data=data
+            )
+            bush_map = {
+                object_id(item): item
                 for item in bushes
-                if object_id(
-                    item
-                )
-                == target_id
-            ),
-            None,
-        )
+            }
 
+        bush = bush_map.get(target_id)
         if bush is not None:
             name = first_attr(
                 bush,
@@ -899,19 +896,82 @@ async def binding_target_label(
                 "title",
                 default=None,
             )
-
             if name:
-                return str(
-                    name
-                )
+                return str(name)
 
-        return (
-            f"Кущ #{target_id}"
+        return f"Кущ #{target_id}"
+
+    return f"#{target_id}"
+
+
+async def load_binding_target_maps(
+    *,
+    bindings: list[Any],
+    data: dict[str, Any],
+) -> tuple[dict[int, Any], dict[int, Any]]:
+    """Preloads store and bush display data for a whole bindings keyboard."""
+    store_ids: set[int] = set()
+    needs_bushes = False
+
+    for binding in bindings:
+        if not binding_is_active(binding):
+            continue
+        if first_attr(
+            binding,
+            "target_name",
+            "store_name",
+            "bush_name",
+            "name",
+            default=None,
+        ):
+            continue
+
+        scope = binding_scope(binding)
+        target_id = binding_target_id(binding)
+        if scope == "store" and target_id > 0:
+            store_ids.add(target_id)
+        elif scope == "bush" and target_id > 0:
+            needs_bushes = True
+
+    store_map: dict[int, Any] = {}
+    if store_ids:
+        repositories = data.get("repositories")
+        session = (
+            data.get("session")
+            or data.get("db_session")
+            or getattr(repositories, "session", None)
         )
+        if session is not None:
+            from sqlalchemy import select
+            from app.database.models.store import Store
 
-    return (
-        f"#{target_id}"
-    )
+            result = await session.scalars(
+                select(Store).where(Store.id.in_(store_ids))
+            )
+            store_map = {
+                int(store.id): store
+                for store in result.unique().all()
+            }
+        else:
+            stores = await query_all_stores(data=data)
+            store_map = {
+                object_id(store): store
+                for store in stores
+                if object_id(store) > 0
+            }
+
+    bush_map: dict[int, Any] = {}
+    if needs_bushes:
+        bushes = await query_network_bushes(data=data)
+        bush_map = {
+            object_id(bush): bush
+            for bush in bushes
+            if object_id(bush) > 0
+        }
+
+    return store_map, bush_map
+
+
 
 
 # =========================================================
@@ -937,12 +997,17 @@ async def bindings_keyboard(
     # EXISTING BINDINGS
     # -----------------------------------------------------
 
-    for binding in bindings:
-        if not binding_is_active(
-            binding
-        ):
-            continue
+    active_bindings = [
+        binding
+        for binding in bindings
+        if binding_is_active(binding)
+    ]
+    store_map, bush_map = await load_binding_target_maps(
+        bindings=active_bindings,
+        data=data,
+    )
 
+    for binding in active_bindings:
         scope = binding_scope(
             binding
         )
@@ -958,6 +1023,8 @@ async def bindings_keyboard(
         label = await binding_target_label(
             binding=binding,
             data=data,
+            store_map=store_map,
+            bush_map=bush_map,
         )
 
         if scope == "store":
