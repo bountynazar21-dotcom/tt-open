@@ -439,41 +439,45 @@ class ScheduleRepository:
         if not normalized_target_days:
             return []
 
-        schedules: list[StoreSchedule] = []
-
         for weekday in normalized_target_days:
             self.validate_weekday(weekday)
 
-            if weekday == source_weekday:
-                continue
+        target_days = [
+            weekday
+            for weekday in normalized_target_days
+            if weekday != source_weekday
+        ]
+        if not target_days:
+            return []
 
-            schedule, _ = (
-                await self.upsert_weekday_schedule(
-                    store_id=store_id,
-                    weekday=weekday,
-                    is_working_day=(
-                        source.is_working_day
+        existing_schedules = await self.get_weekly_schedule(
+            store_id,
+            weekdays=set(target_days),
+            for_update=True,
+        )
+        results = await self.upsert_weekday_schedules_many(
+            store_id=store_id,
+            items=[
+                {
+                    "weekday": weekday,
+                    "is_working_day": source.is_working_day,
+                    "opening_time": source.opening_time,
+                    "opening_control_deadline": (
+                        source.opening_control_deadline
                     ),
-                    opening_time=(
-                        source.opening_time
+                    "closing_time": source.closing_time,
+                    "closing_control_deadline": (
+                        source.closing_control_deadline
                     ),
-                    opening_control_deadline=(
-                        source
-                        .opening_control_deadline
-                    ),
-                    closing_time=(
-                        source.closing_time
-                    ),
-                    closing_control_deadline=(
-                        source
-                        .closing_control_deadline
-                    ),
-                )
-            )
-
-            schedules.append(schedule)
-
-        return schedules
+                }
+                for weekday in target_days
+            ],
+            existing_schedules=existing_schedules,
+        )
+        return [
+            schedule
+            for schedule, _ in results
+        ]
 
     async def delete_weekday_schedule(
         self,
@@ -1929,46 +1933,40 @@ class ScheduleRepository:
         for weekday in active_days:
             self.validate_weekday(weekday)
 
-        schedules: list[StoreSchedule] = []
-
-        for weekday in range(7):
-            is_working_day = (
-                weekday in active_days
-            )
-
-            schedule, _ = (
-                await self.upsert_weekday_schedule(
-                    store_id=store_id,
-                    weekday=weekday,
-                    is_working_day=(
-                        is_working_day
-                    ),
-                    opening_time=(
+        results = await self.upsert_weekday_schedules_many(
+            store_id=store_id,
+            items=[
+                {
+                    "weekday": weekday,
+                    "is_working_day": weekday in active_days,
+                    "opening_time": (
                         opening_time
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                    opening_control_deadline=(
+                    "opening_control_deadline": (
                         opening_control_deadline
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                    closing_time=(
+                    "closing_time": (
                         closing_time
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                    closing_control_deadline=(
+                    "closing_control_deadline": (
                         closing_control_deadline
-                        if is_working_day
+                        if weekday in active_days
                         else None
                     ),
-                )
-            )
-
-            schedules.append(schedule)
-
-        return schedules
+                }
+                for weekday in range(7)
+            ],
+        )
+        return [
+            schedule
+            for schedule, _ in results
+        ]
 
     # ==========================================
     # ДОПОМІЖНІ МЕТОДИ
