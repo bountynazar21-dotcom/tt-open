@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.database.models.enums import ClosingStatus, StoreStatus, UserRole, UserStatus
+from app.database.models.enums import ClosingStatus, OpeningStatus, StoreStatus, UserRole, UserStatus
 from app.repositories.closing import ClosingRepository
+from app.repositories.opening import OpeningRepository
 from app.repositories.schedule import ScheduleRepository
 from app.services.group_service import GroupService
 from app.services.closing_service import ClosingService
@@ -222,3 +223,135 @@ async def test_group_integer_settings_are_loaded_in_one_query() -> None:
         "telegram_groups_bush_1_summaries_thread_id": 15,
     }
     session.scalars.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_count", [50, 85])
+async def test_opening_summary_data_for_all_bushes_uses_one_query(
+    store_count: int,
+) -> None:
+    rows = []
+    for store_id in range(1, store_count + 1):
+        bush_id = (store_id % 6) + 1
+        if store_id % 5 == 0:
+            status = OpeningStatus.MISSED_CONTROL_DEADLINE
+            lateness = 0
+        elif store_id % 4 == 0:
+            status = OpeningStatus.OPENED_LATE
+            lateness = 12
+        elif store_id % 3 == 0:
+            status = OpeningStatus.WAITING
+            lateness = 0
+        else:
+            status = OpeningStatus.OPENED_ON_TIME
+            lateness = 0
+        rows.append((
+            SimpleNamespace(
+                id=store_id,
+                store_id=store_id,
+                status=status,
+                lateness_minutes=lateness,
+                actual_open_time=(
+                    None if status == OpeningStatus.WAITING else object()
+                ),
+            ),
+            bush_id,
+        ))
+
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=FakeRows(rows))
+    )
+    repository = object.__new__(OpeningRepository)
+    repository.session = session
+
+    result = await repository.get_summary_data_by_bush(
+        business_date=date(2026, 11, 23),
+        bush_ids={1, 2, 3, 4, 5, 6},
+    )
+
+    assert set(result) == {1, 2, 3, 4, 5, 6}
+    assert sum(
+        data["statistics"]["expected_count"]
+        for data in result.values()
+    ) == store_count
+    assert sum(
+        data["statistics"]["missed_count"]
+        for data in result.values()
+    ) == sum(1 for row in rows if row[0].status == OpeningStatus.MISSED_CONTROL_DEADLINE)
+    assert sum(
+        len(data["waiting_checkins"])
+        for data in result.values()
+    ) == sum(1 for row in rows if row[0].status == OpeningStatus.WAITING)
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_count", [50, 85])
+async def test_closing_summary_data_for_all_bushes_uses_one_query(
+    store_count: int,
+) -> None:
+    from decimal import Decimal
+
+    rows = []
+    for store_id in range(1, store_count + 1):
+        bush_id = (store_id % 6) + 1
+        if store_id % 5 == 0:
+            status = ClosingStatus.MISSED_DEADLINE
+            cash = None
+            submitted_at = None
+        elif store_id % 4 == 0:
+            status = ClosingStatus.SUBMITTED_LATE
+            cash = Decimal("120.50")
+            submitted_at = object()
+        elif store_id % 3 == 0:
+            status = ClosingStatus.WAITING
+            cash = None
+            submitted_at = None
+        else:
+            status = ClosingStatus.SUBMITTED_ON_TIME
+            cash = Decimal("100.00")
+            submitted_at = object()
+        rows.append((
+            SimpleNamespace(
+                id=store_id,
+                store_id=store_id,
+                status=status,
+                cash_amount=cash,
+                actual_submitted_at=submitted_at,
+            ),
+            bush_id,
+        ))
+
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=FakeRows(rows))
+    )
+    repository = object.__new__(ClosingRepository)
+    repository.session = session
+
+    result = await repository.get_summary_data_by_bush(
+        business_date=date(2026, 11, 23),
+        bush_ids={1, 2, 3, 4, 5, 6},
+    )
+
+    assert set(result) == {1, 2, 3, 4, 5, 6}
+    assert sum(
+        data["statistics"]["expected_count"]
+        for data in result.values()
+    ) == store_count
+    assert sum(
+        data["statistics"]["missed_count"]
+        for data in result.values()
+    ) == sum(1 for row in rows if row[0].status == ClosingStatus.MISSED_DEADLINE)
+    assert sum(
+        len(data["waiting_reports"])
+        for data in result.values()
+    ) == sum(1 for row in rows if row[0].status == ClosingStatus.WAITING)
+    assert sum(
+        data["statistics"]["total_cash"]
+        for data in result.values()
+    ) == sum(
+        (row[0].cash_amount or Decimal("0"))
+        for row in rows
+    )
+    session.execute.assert_awaited_once()
