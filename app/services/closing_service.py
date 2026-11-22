@@ -1313,14 +1313,6 @@ class ClosingService:
             for store in missed_stores
         }
 
-        recipients_by_store: dict[int, list[User]] = {}
-        if create_notifications and missed_stores:
-            recipients_by_store = (
-                await self.get_alert_recipients_for_stores(
-                    missed_stores
-                )
-            )
-
         notifications: list[
             NotificationLog
         ] = []
@@ -1336,6 +1328,18 @@ class ClosingService:
                 default=True,
             )
         )
+
+        recipients_by_store: dict[int, list[User]] = {}
+        if (
+            create_notifications
+            and notifications_enabled
+            and missed_stores
+        ):
+            recipients_by_store = (
+                await self.get_alert_recipients_for_stores(
+                    missed_stores
+                )
+            )
 
         if (
             create_notifications
