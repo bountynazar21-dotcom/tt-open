@@ -785,6 +785,24 @@ class OpeningService:
             )
         )
 
+        missed_store_ids = {
+            checkin.store_id
+            for checkin in missed_checkins
+        }
+        missed_stores = await self.load_stores(missed_store_ids)
+        missed_stores_by_id = {
+            store.id: store
+            for store in missed_stores
+        }
+
+        recipients_by_store: dict[int, list[User]] = {}
+        if create_notifications and missed_stores:
+            recipients_by_store = (
+                await self.get_alert_recipients_for_stores(
+                    missed_stores
+                )
+            )
+
         notifications: list[
             NotificationLog
         ] = []
@@ -806,20 +824,21 @@ class OpeningService:
             and notifications_enabled
         ):
             for checkin in missed_checkins:
-                store = (
-                    await self.access
-                    .get_store_or_raise(
+                store = missed_stores_by_id.get(checkin.store_id)
+                if store is None:
+                    store = await self.access.get_store_or_raise(
                         checkin.store_id
                     )
-                )
 
                 queued, created_count = (
                     await self.queue_missed_notifications(
                         store=store,
                         checkin=checkin,
                         queued_at=current_time,
-                        timezone_name=(
-                            resolved_timezone
+                        timezone_name=resolved_timezone,
+                        recipients=recipients_by_store.get(
+                            store.id,
+                            [],
                         ),
                     )
                 )
@@ -835,12 +854,11 @@ class OpeningService:
                 )
 
         for checkin in missed_checkins:
-            store = (
-                await self.access
-                .get_store_or_raise(
+            store = missed_stores_by_id.get(checkin.store_id)
+            if store is None:
+                store = await self.access.get_store_or_raise(
                     checkin.store_id
                 )
-            )
 
             await self.log_missed_deadline(
                 store=store,
@@ -906,6 +924,7 @@ class OpeningService:
         checkin: OpeningCheckin,
         queued_at: datetime,
         timezone_name: str,
+        recipients: list[User] | None = None,
     ) -> tuple[list[NotificationLog], int]:
         """
         Створює повідомлення для:
@@ -917,9 +936,8 @@ class OpeningService:
         - ROOT_ADMIN.
         """
 
-        recipients = await self.get_alert_recipients(
-            store
-        )
+        if recipients is None:
+            recipients = await self.get_alert_recipients(store)
 
         if not recipients:
             return [], 0
@@ -1012,6 +1030,69 @@ class OpeningService:
                 created_count += 1
 
         return notifications, created_count
+
+    async def get_alert_recipients_for_stores(
+        self,
+        stores: list[Store],
+    ) -> dict[int, list[User]]:
+        """Load bush recipients and root admins once for a store batch."""
+        if not stores:
+            return {}
+
+        from app.database.models.binding import UserBushBinding
+        from app.database.models.enums import BindingStatus
+
+        bush_ids = {
+            store.bush_id
+            for store in stores
+            if store.bush_id is not None
+        }
+        recipients_by_bush: dict[int, dict[int, User]] = {}
+
+        if bush_ids:
+            result = await self.session.execute(
+                select(UserBushBinding.bush_id, User)
+                .join(User, User.id == UserBushBinding.user_id)
+                .where(
+                    UserBushBinding.bush_id.in_(bush_ids),
+                    UserBushBinding.status == BindingStatus.APPROVED,
+                    UserBushBinding.role.in_({
+                        UserRole.BUSH_ADMIN,
+                        UserRole.LION,
+                    }),
+                    User.status == UserStatus.ACTIVE,
+                    User.is_blocked.is_(False),
+                )
+            )
+            for bush_id, user in result.all():
+                recipients_by_bush.setdefault(
+                    int(bush_id),
+                    {},
+                )[user.id] = user
+
+        root_result = await self.session.scalars(
+            select(User).where(
+                User.role == UserRole.ROOT_ADMIN,
+                User.status == UserStatus.ACTIVE,
+                User.is_blocked.is_(False),
+            ).order_by(User.id.asc())
+        )
+        root_admins = list(root_result.unique().all())
+
+        recipients_by_store: dict[int, list[User]] = {}
+        for store in stores:
+            recipients = dict(
+                recipients_by_bush.get(store.bush_id, {})
+                if store.bush_id is not None
+                else {}
+            )
+            recipients.update({
+                user.id: user
+                for user in root_admins
+            })
+            recipients_by_store[store.id] = list(recipients.values())
+
+        return recipients_by_store
 
     async def get_alert_recipients(
         self,
