@@ -640,58 +640,55 @@ async def query_all_stores(
         )
     )
 
-    for store_id in direct_ids:
-        service = get_service(
-            data,
-            "stores",
-            "store",
-        )
+    if direct_ids:
+        session = data.get("session") or data.get("db_session")
+        if session is not None:
+            from sqlalchemy import select
+            from app.database.models.store import Store
 
-        store = None
-
-        if service is not None:
-            for method_name in (
-                "get_store",
-                "get_store_or_raise",
-                "get_by_id",
-                "get",
-            ):
-                method = getattr(
-                    service,
-                    method_name,
-                    None,
+            direct_result = await session.scalars(
+                select(Store).where(Store.id.in_(direct_ids))
+            )
+            stores.extend(direct_result.unique().all())
+        else:
+            for store_id in direct_ids:
+                service = get_service(
+                    data,
+                    "stores",
+                    "store",
                 )
+                store = None
 
-                if not callable(
-                    method
-                ):
-                    continue
-
-                try:
-                    store = await call_method(
-                        method,
-                        {
-                            "store_id":
-                                store_id,
-
-                            "id":
-                                store_id,
-
-                            "include_inactive":
-                                True,
-                        },
-                    )
-
-                except Exception:
-                    continue
+                if service is not None:
+                    for method_name in (
+                        "get_store",
+                        "get_store_or_raise",
+                        "get_by_id",
+                        "get",
+                    ):
+                        method = getattr(
+                            service,
+                            method_name,
+                            None,
+                        )
+                        if not callable(method):
+                            continue
+                        try:
+                            store = await call_method(
+                                method,
+                                {
+                                    "store_id": store_id,
+                                    "id": store_id,
+                                    "include_inactive": True,
+                                },
+                            )
+                        except Exception:
+                            continue
+                        if store is not None:
+                            break
 
                 if store is not None:
-                    break
-
-        if store is not None:
-            stores.append(
-                store
-            )
+                    stores.append(store)
 
     # -----------------------------------------------------
     # DEDUPLICATE
