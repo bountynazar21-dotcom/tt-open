@@ -1011,17 +1011,23 @@ async def build_director_store_item(
         )
 
     else:
-        opening = await get_opening_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            opening = opening_by_store.get(store_id)
+        else:
+            opening = await get_opening_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
-        closing = await get_closing_status(
-            store_id=store_id,
-            user=user,
-            data=data,
-        )
+        if has_bulk_cache:
+            closing = closing_by_store.get(store_id)
+        else:
+            closing = await get_closing_status(
+                store_id=store_id,
+                user=user,
+                data=data,
+            )
 
     opened = opening_exists(
         opening
@@ -2885,6 +2891,23 @@ async def director_missing_closing_callback(
             store
         )
     ]
+
+    await _prime_director_status_cache(
+        data=data,
+    )
+
+    opening_by_store = data.get(
+        "_director_opening_by_store",
+        {},
+    )
+    closing_by_store = data.get(
+        "_director_closing_by_store",
+        {},
+    )
+    has_bulk_cache = (
+        data.get("_director_status_cache_date")
+        is not None
+    )
 
     missing_items: list[
         DirectorStoreItem
