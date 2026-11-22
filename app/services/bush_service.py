@@ -1516,25 +1516,59 @@ class BushService:
             BushBulkItemResult
         ] = []
 
-        for data in bushes:
+        normalized_inputs: dict[int, tuple[str, str | None]] = {}
+        for index, data in enumerate(bushes):
             try:
-                normalized_name = (
+                normalized_inputs[index] = (
                     self.normalize_required_text(
                         data.name,
                         field_name="Назва куща",
                         max_length=255,
-                    )
+                    ),
+                    self.normalize_optional_code(data.code),
                 )
+            except Exception:
+                # Preserve item-level validation errors in the main loop.
+                continue
 
-                normalized_code = (
-                    self.normalize_optional_code(
-                        data.code
+        existing_bushes = await self.find_bushes_matching(
+            names={
+                name.lower()
+                for name, _ in normalized_inputs.values()
+            },
+            codes={
+                code.lower()
+                for _, code in normalized_inputs.values()
+                if code is not None
+            },
+        )
+
+        for index, data in enumerate(bushes):
+            try:
+                normalized = normalized_inputs.get(index)
+                if normalized is None:
+                    normalized_name = self.normalize_required_text(
+                        data.name,
+                        field_name="Назва куща",
+                        max_length=255,
                     )
-                )
+                    normalized_code = self.normalize_optional_code(data.code)
+                else:
+                    normalized_name, normalized_code = normalized
 
-                existing = await self.find_bush(
-                    name=normalized_name,
-                    code=normalized_code,
+                existing = next(
+                    (
+                        bush
+                        for bush in existing_bushes
+                        if (
+                            normalized_code is not None
+                            and str(getattr(bush, "code", "") or "").lower()
+                            == normalized_code.lower()
+                        )
+                        or str(getattr(bush, "name", "") or "").lower()
+                        == normalized_name.lower()
+                    ),
+                    None,
                 )
 
                 if existing is None:
@@ -1548,6 +1582,8 @@ class BushService:
                         is_active=data.is_active,
                         reason=normalized_reason,
                     )
+
+                    existing_bushes.append(result.bush)
 
                     items.append(
                         BushBulkItemResult(
@@ -1686,6 +1722,47 @@ class BushService:
     # ==========================================
     # ПОШУК МОДЕЛІ КУЩА
     # ==========================================
+
+    async def find_bushes_matching(
+        self,
+        *,
+        names: set[str],
+        codes: set[str],
+    ) -> list[Bush]:
+        """Loads existing bushes matching a set of names/codes in one query."""
+        from sqlalchemy import or_
+
+        conditions: list[Any] = []
+        name_column = self.model_column("name", "title")
+        code_column = self.model_column("code", "slug")
+
+        normalized_names = {
+            str(name).strip().lower()
+            for name in names
+            if name and str(name).strip()
+        }
+        normalized_codes = {
+            str(code).strip().lower()
+            for code in codes
+            if code and str(code).strip()
+        }
+        if normalized_names and name_column is not None:
+            conditions.append(
+                func.lower(name_column).in_(normalized_names)
+            )
+        if normalized_codes and code_column is not None:
+            conditions.append(
+                func.lower(code_column).in_(normalized_codes)
+            )
+        if not conditions:
+            return []
+
+        result = await self.session.scalars(
+            select(Bush)
+            .where(or_(*conditions))
+            .order_by(Bush.id.asc())
+        )
+        return list(result.unique().all())
 
     async def find_bush(
         self,
