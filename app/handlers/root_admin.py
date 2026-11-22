@@ -1264,6 +1264,64 @@ async def count_bush_stores(
     )
 
 
+async def count_bush_stores_many(
+    *,
+    bushes: list[Any],
+    data: dict[str, Any],
+) -> dict[int, int]:
+    """Count stores for a bush list in one query, respecting visible scope."""
+    bush_ids = {
+        object_id(bush)
+        for bush in bushes
+        if object_id(bush) > 0
+    }
+    if not bush_ids:
+        return {}
+
+    session = data.get("session") or data.get("db_session")
+    if session is None:
+        return {
+            bush_id: await count_bush_stores(
+                bush_id=bush_id,
+                data=data,
+            )
+            for bush_id in bush_ids
+        }
+
+    from sqlalchemy import select
+    from app.database.models.store import Store
+
+    result = await session.execute(
+        select(Store.id, Store.bush_id).where(
+            Store.bush_id.in_(bush_ids)
+        )
+    )
+    rows_by_bush: dict[int, list[int]] = {}
+    for store_id, bush_id in result.all():
+        if bush_id is not None:
+            rows_by_bush.setdefault(int(bush_id), []).append(int(store_id))
+
+    if has_network_access(data):
+        return {
+            bush_id: len(rows_by_bush.get(bush_id, []))
+            for bush_id in bush_ids
+        }
+
+    allowed_bushes = accessible_bush_ids(data)
+    direct_store_ids = accessible_store_ids(data)
+    return {
+        bush_id: (
+            len(rows_by_bush.get(bush_id, []))
+            if bush_id in allowed_bushes
+            else sum(
+                store_id in direct_store_ids
+                for store_id in rows_by_bush.get(bush_id, [])
+            )
+        )
+        for bush_id in bush_ids
+    }
+
+
 async def build_director_bush_items(
     *,
     bushes: list[Any],
@@ -1274,6 +1332,11 @@ async def build_director_bush_items(
     """
     Bush ORM -> DirectorBushItem.
     """
+
+    stores_count_by_bush = await count_bush_stores_many(
+        bushes=bushes,
+        data=data,
+    )
 
     result: list[
         DirectorBushItem
@@ -1296,11 +1359,9 @@ async def build_director_bush_items(
             ),
         )
 
-        stores_count = (
-            await count_bush_stores(
-                bush_id=bush_id,
-                data=data,
-            )
+        stores_count = stores_count_by_bush.get(
+            bush_id,
+            0,
         )
 
         item = create_model(
