@@ -1518,16 +1518,30 @@ class StoreService:
 
         items: list[StoreBulkItemResult] = []
 
-        for store_data in stores:
+        normalized_codes: dict[int, str] = {}
+        for index, store_data in enumerate(stores):
             try:
-                normalized_code = (
-                    self.normalize_code(
+                normalized_codes[index] = self.normalize_code(
+                    store_data.code
+                )
+            except Exception:
+                # Keep per-item validation and error reporting inside the main loop.
+                continue
+
+        existing_by_code = await self.find_by_codes(
+            set(normalized_codes.values())
+        )
+
+        for index, store_data in enumerate(stores):
+            try:
+                normalized_code = normalized_codes.get(index)
+                if normalized_code is None:
+                    normalized_code = self.normalize_code(
                         store_data.code
                     )
-                )
 
-                existing = await self.find_by_code(
-                    normalized_code
+                existing = existing_by_code.get(
+                    normalized_code.lower()
                 )
 
                 if existing is None:
@@ -1549,6 +1563,8 @@ class StoreService:
                         ),
                         reason=normalized_reason,
                     )
+
+                    existing_by_code[normalized_code.lower()] = result.store
 
                     items.append(
                         StoreBulkItemResult(
@@ -2018,6 +2034,35 @@ class StoreService:
             )
 
         return cluster
+
+    async def find_by_codes(
+        self,
+        codes: set[str],
+    ) -> dict[str, Store]:
+        """Loads all matching stores by normalized code in one query."""
+        normalized_codes = {
+            str(code).strip().lower()
+            for code in codes
+            if code and str(code).strip()
+        }
+        if not normalized_codes:
+            return {}
+
+        code_column = self.model_column("code")
+        if code_column is None:
+            return {}
+
+        result = await self.session.scalars(
+            select(Store)
+            .where(func.lower(code_column).in_(normalized_codes))
+            .order_by(Store.id.asc())
+        )
+        stores_by_code: dict[str, Store] = {}
+        for store in result.unique().all():
+            code = str(getattr(store, "code", "") or "").strip().lower()
+            if code:
+                stores_by_code.setdefault(code, store)
+        return stores_by_code
 
     async def find_by_code(
         self,
