@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.database.models.enums import ClosingStatus, OpeningStatus, StoreStatus, UserRole, UserStatus
+from app.database.models.enums import BindingStatus, ClosingStatus, OpeningStatus, StoreStatus, UserRole, UserStatus
 from app.database.models.daily_summary import DailySummaryMessage
 from app.database.models.enums import SummaryType
 from app.repositories.daily_summary import DailySummaryRepository
@@ -585,6 +585,51 @@ async def test_bulk_cluster_assignment_preloads_bush_permissions_once() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_store_binding_repository_applies_active_only_filter() -> None:
+    binding = SimpleNamespace(id=1, user_id=2, store_id=3)
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult([binding]))
+    )
+    repository = object.__new__(BindingRepository)
+    repository.session = session
+
+    result = await repository.get_store_binding(
+        user_id=2,
+        store_id=3,
+        active_only=True,
+        for_update=True,
+    )
+
+    statement = session.scalars.await_args.args[0]
+    assert result is binding
+    assert len(statement._where_criteria) == 3
+    session.scalars.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bush_binding_repository_accepts_optional_role_and_active_filter() -> None:
+    binding = SimpleNamespace(id=1, user_id=2, bush_id=3)
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult([binding]))
+    )
+    repository = object.__new__(BindingRepository)
+    repository.session = session
+
+    result = await repository.get_bush_binding(
+        user_id=2,
+        bush_id=3,
+        role=UserRole.LION,
+        active_only=True,
+        for_update=True,
+    )
+
+    statement = session.scalars.await_args.args[0]
+    assert result is binding
+    assert len(statement._where_criteria) == 4
+    session.scalars.assert_awaited_once()
+
+
 async def test_store_bindings_for_many_users_use_one_query() -> None:
     bindings = [
         SimpleNamespace(id=user_id, user_id=user_id, store_id=17)
