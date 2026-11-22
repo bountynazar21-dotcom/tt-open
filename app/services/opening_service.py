@@ -836,10 +836,7 @@ class OpeningService:
                         checkin=checkin,
                         queued_at=current_time,
                         timezone_name=resolved_timezone,
-                        recipients=recipients_by_store.get(
-                            store.id,
-                            [],
-                        ),
+                        recipients=recipients_by_store.get(store.id),
                     )
                 )
 
