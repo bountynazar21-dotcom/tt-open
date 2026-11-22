@@ -1917,15 +1917,22 @@ class BindingService:
             user.id: user
             for user in users_result.unique().all()
         }
-        bindings_by_user = (
-            await self.repositories.bindings
-            .get_bush_bindings_for_users(
-                user_ids=set(normalized_user_ids),
-                bush_id=bush_id,
-                role=role,
-                for_update=True,
+        if role in {
+            UserRole.BUSH_ADMIN,
+            UserRole.LION,
+        }:
+            bindings_by_user = (
+                await self.repositories.bindings
+                .get_bush_bindings_for_users(
+                    user_ids=set(normalized_user_ids),
+                    bush_id=bush_id,
+                    role=role,
+                    for_update=True,
+                )
             )
-        )
+        else:
+            # Let each item keep the existing unsupported-role error result.
+            bindings_by_user = {}
 
         items: list[BulkBindingItemResult] = []
 
