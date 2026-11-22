@@ -608,9 +608,6 @@ async def test_store_bindings_for_many_users_use_one_query() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user_count", [50, 85])
-
-@pytest.mark.asyncio
 async def test_bush_bindings_for_many_users_use_one_query() -> None:
     bindings = [
         SimpleNamespace(id=user_id, user_id=user_id, bush_id=8, role=UserRole.LION)
@@ -718,6 +715,8 @@ async def test_bulk_bush_assignment_preloads_users_and_bindings(
         assert call.kwargs["_bush_access_prevalidated"] is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_count", [50, 85])
 async def test_bulk_store_assignment_preloads_users_and_bindings(
     user_count: int,
 ) -> None:
