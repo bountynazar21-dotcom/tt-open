@@ -1210,13 +1210,22 @@ class OpeningService:
             )
         )
 
-        for bush_id in sorted(
-            target_bush_ids
-        ):
-            bush = await self.session.get(
-                Bush,
-                bush_id,
+        bushes_result = await self.session.scalars(
+            select(Bush)
+            .where(Bush.id.in_(target_bush_ids))
+            .order_by(Bush.id.asc())
+        ) if target_bush_ids else None
+        bushes_by_id = {
+            bush.id: bush
+            for bush in (
+                bushes_result.unique().all()
+                if bushes_result is not None
+                else []
             )
+        }
+
+        for bush_id in sorted(target_bush_ids):
+            bush = bushes_by_id.get(bush_id)
 
             if bush is None:
                 continue
