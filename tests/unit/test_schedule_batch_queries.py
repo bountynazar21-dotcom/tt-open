@@ -1239,3 +1239,75 @@ async def test_closing_missing_records_check_all_dates_in_one_query(
     session.execute.assert_awaited_once()
     session.add_all.assert_called_once()
     session.flush.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+async def test_copy_weekday_schedule_uses_one_batch_for_target_days() -> None:
+    source = SimpleNamespace(
+        weekday=0,
+        is_working_day=True,
+        opening_time=time(9, 0),
+        opening_control_deadline=time(9, 10),
+        closing_time=time(21, 0),
+        closing_control_deadline=time(21, 10),
+    )
+    targets = [
+        SimpleNamespace(weekday=weekday)
+        for weekday in range(1, 7)
+    ]
+    repository = object.__new__(ScheduleRepository)
+    repository.get_weekday_schedule = AsyncMock(return_value=source)
+    repository.get_weekly_schedule = AsyncMock(return_value=[])
+    repository.upsert_weekday_schedules_many = AsyncMock(
+        return_value=[(target, True) for target in targets]
+    )
+
+    result = await repository.copy_weekday_schedule(
+        store_id=42,
+        source_weekday=0,
+        target_weekdays=set(range(7)),
+    )
+
+    assert result == targets
+    repository.get_weekday_schedule.assert_awaited_once_with(
+        store_id=42,
+        weekday=0,
+    )
+    repository.get_weekly_schedule.assert_awaited_once_with(
+        42,
+        weekdays=set(range(1, 7)),
+        for_update=True,
+    )
+    repository.upsert_weekday_schedules_many.assert_awaited_once()
+    assert len(
+        repository.upsert_weekday_schedules_many.await_args.kwargs["items"]
+    ) == 6
+
+
+@pytest.mark.asyncio
+async def test_create_default_weekly_schedule_uses_one_batch_for_seven_days() -> None:
+    schedules = [
+        SimpleNamespace(weekday=weekday)
+        for weekday in range(7)
+    ]
+    repository = object.__new__(ScheduleRepository)
+    repository.upsert_weekday_schedules_many = AsyncMock(
+        return_value=[(schedule, True) for schedule in schedules]
+    )
+
+    result = await repository.create_default_weekly_schedule(
+        store_id=42,
+        opening_time=time(9, 0),
+        opening_control_deadline=time(9, 10),
+        working_weekdays={0, 1, 2, 3, 4},
+    )
+
+    assert result == schedules
+    repository.upsert_weekday_schedules_many.assert_awaited_once()
+    items = repository.upsert_weekday_schedules_many.await_args.kwargs["items"]
+    assert len(items) == 7
+    assert [item["weekday"] for item in items] == list(range(7))
+    assert [item["is_working_day"] for item in items] == [
+        True, True, True, True, True, False, False
+    ]
