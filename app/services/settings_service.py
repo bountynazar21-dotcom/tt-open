@@ -506,6 +506,15 @@ class SettingsService:
             )
         )
 
+        setting_preload_kwargs = (
+            {
+                "_preloaded_setting": _preloaded_setting,
+                "_setting_preloaded": True,
+            }
+            if _setting_preloaded
+            else {}
+        )
+
         result = (
             await self.repositories.settings
             .set_value(
@@ -522,8 +531,7 @@ class SettingsService:
                 update_category=(
                     update_category
                 ),
-                _preloaded_setting=_preloaded_setting,
-                _setting_preloaded=_setting_preloaded,
+                **setting_preload_kwargs,
             )
         )
 
