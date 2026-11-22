@@ -635,15 +635,17 @@ async def _prime_bush_status_cache(
     from app.database.models.opening_checkin import (
         OpeningCheckin,
     )
-    from app.utils.datetime import today_local
+    from app.utils.datetime import closing_business_date, now_local, today_local
 
     today = today_local()
+    closing_date = closing_business_date(now_local())
+    cache_key = (today, closing_date)
 
     if (
         data.get(
             "_bush_status_cache_date"
         )
-        == today
+        == cache_key
     ):
         return
 
@@ -673,7 +675,7 @@ async def _prime_bush_status_cache(
                 ClosingReport
             ).where(
                 ClosingReport.business_date
-                == today
+                == closing_date
             )
         )
 
@@ -719,12 +721,13 @@ async def _prime_bush_status_cache(
 
     data[
         "_bush_status_cache_date"
-    ] = today
+    ] = cache_key
 
     logger.info(
         "Bush bulk cache ready | "
-        "date=%s openings=%s closings=%s",
+        "opening_date=%s closing_date=%s openings=%s closings=%s",
         today,
+        closing_date,
         len(opening_rows),
         len(closing_rows),
     )
