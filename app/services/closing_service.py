@@ -1341,6 +1341,7 @@ class ClosingService:
             create_notifications
             and notifications_enabled
         ):
+            notification_items: list[dict[str, Any]] = []
             for report in missed_reports:
                 store = missed_stores_by_id.get(report.store_id)
                 if store is None:
@@ -1348,24 +1349,31 @@ class ClosingService:
                         report.store_id
                     )
 
-                queued, created_count = (
-                    await self.queue_missed_notifications(
+                recipients = recipients_by_store.get(store.id)
+                if recipients is None:
+                    recipients = await self.get_alert_recipients(store)
+
+                notification_items.extend(
+                    self.build_missed_notification_items(
                         store=store,
                         report=report,
+                        recipients=recipients,
                         queued_at=current_time,
-                        recipients=recipients_by_store.get(store.id),
                     )
                 )
 
-                notifications.extend(queued)
-
-                created_notifications += (
-                    created_count
+            if notification_items:
+                (
+                    notifications,
+                    created_notifications,
+                ) = (
+                    await self.repositories.notifications
+                    .get_or_create_many_from_parts(
+                        notification_items
+                    )
                 )
-
-                existing_notifications += (
-                    len(queued)
-                    - created_count
+                existing_notifications = (
+                    len(notifications) - created_notifications
                 )
 
         for report in missed_reports:
@@ -1432,6 +1440,56 @@ class ClosingService:
     # СПОВІЩЕННЯ ПРО НЕПОДАНИЙ ЗВІТ
     # ==========================================
 
+    def build_missed_notification_items(
+        self,
+        *,
+        store: Store,
+        report: ClosingReport,
+        recipients: list[User] | None,
+        queued_at: datetime,
+    ) -> list[dict[str, Any]]:
+        """Build deduplicated notification payloads without database I/O."""
+        if not recipients:
+            return []
+
+        notification_type = self.resolve_notification_type(
+            "closing_missed",
+            "closing_deadline_missed",
+            "closing_alert",
+            "report_not_submitted",
+        )
+        message_text = self.build_missed_notification_text(
+            store=store,
+            report=report,
+        )
+
+        items: list[dict[str, Any]] = []
+        for recipient in recipients:
+            if recipient.telegram_id is None:
+                continue
+            items.append({
+                "notification_type": notification_type,
+                "business_date": report.business_date,
+                "recipient_user_id": recipient.id,
+                "store_id": store.id,
+                "bush_id": store.bush_id,
+                "chat_id": recipient.telegram_id,
+                "suffix": "closing-deadline-missed",
+                "scheduled_for": queued_at,
+                "message_text": message_text,
+                "payload_json": {
+                    "report_id": report.id,
+                    "store_id": store.id,
+                    "store_code": self.store_display_name(store),
+                    "business_date": report.business_date.isoformat(),
+                    "scheduled_close_time": report.scheduled_close_time.strftime("%H:%M"),
+                    "control_deadline": report.control_deadline.strftime("%H:%M"),
+                    "recipient_role": recipient.role.value,
+                    "parse_mode": "HTML",
+                },
+            })
+        return items
+
     async def queue_missed_notifications(
         self,
         *,
@@ -1440,108 +1498,22 @@ class ClosingService:
         queued_at: datetime,
         recipients: list[User] | None = None,
     ) -> tuple[list[NotificationLog], int]:
-        """
-        Створює повідомлення для:
-
-        - працівників ТТ;
-        - адміністратора куща;
-        - левів;
-        - директорів;
-        - ROOT_ADMIN.
-        """
-
+        """Create missed-closing notifications for one store."""
         if recipients is None:
             recipients = await self.get_alert_recipients(store)
 
-        if not recipients:
+        items = self.build_missed_notification_items(
+            store=store,
+            report=report,
+            recipients=recipients,
+            queued_at=queued_at,
+        )
+        if not items:
             return [], 0
 
-        notification_type = (
-            self.resolve_notification_type(
-                "closing_missed",
-                "closing_deadline_missed",
-                "closing_alert",
-                "report_not_submitted",
-            )
+        return await self.repositories.notifications.get_or_create_many_from_parts(
+            items
         )
-
-        message_text = (
-            self.build_missed_notification_text(
-                store=store,
-                report=report,
-            )
-        )
-
-        notifications: list[
-            NotificationLog
-        ] = []
-
-        created_count = 0
-
-        for recipient in recipients:
-            if recipient.telegram_id is None:
-                continue
-
-            notification, was_created = (
-                await self.repositories.notifications
-                .get_or_create_from_parts(
-                    notification_type=(
-                        notification_type
-                    ),
-                    business_date=(
-                        report.business_date
-                    ),
-                    recipient_user_id=(
-                        recipient.id
-                    ),
-                    store_id=store.id,
-                    bush_id=store.bush_id,
-                    chat_id=(
-                        recipient.telegram_id
-                    ),
-                    suffix=(
-                        "closing-deadline-missed"
-                    ),
-                    scheduled_for=queued_at,
-                    message_text=message_text,
-                    payload_json={
-                        "report_id": report.id,
-                        "store_id": store.id,
-                        "store_code": (
-                            self.store_display_name(
-                                store
-                            )
-                        ),
-                        "business_date": (
-                            report.business_date
-                            .isoformat()
-                        ),
-                        "scheduled_close_time": (
-                            report
-                            .scheduled_close_time
-                            .strftime("%H:%M")
-                        ),
-                        "control_deadline": (
-                            report
-                            .control_deadline
-                            .strftime("%H:%M")
-                        ),
-                        "recipient_role": (
-                            recipient.role.value
-                        ),
-                        "parse_mode": "HTML",
-                    },
-                )
-            )
-
-            notifications.append(
-                notification
-            )
-
-            if was_created:
-                created_count += 1
-
-        return notifications, created_count
 
     async def get_alert_recipients_for_stores(
         self,
