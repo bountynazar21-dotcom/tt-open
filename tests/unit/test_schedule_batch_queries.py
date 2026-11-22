@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import time
+from datetime import date, time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -74,7 +74,7 @@ async def test_deadline_store_queries_do_not_scale_with_store_count(
     repository = ScheduleRepository(session)
 
     method = getattr(repository, method_name)
-    result = await method(business_date=__import__("datetime").date(2026, 11, 23))
+    result = await method(business_date=date(2026, 11, 23))
 
     assert len(result) == store_count
     assert all(getattr(schedule, required_attribute) for _, schedule in result)
