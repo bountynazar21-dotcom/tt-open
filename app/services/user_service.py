@@ -2356,23 +2356,19 @@ class UserService:
         # Адмін куща може бачити
         # працівників ТТ свого куща.
 
-        for store_id in (
+        if (
             target_access.store_ids
+            and actor_access.bush_ids
         ):
-            store = await self.session.get(
-                Store,
-                store_id,
-            )
-
-            if (
-                store is not None
-                and getattr(
-                    store,
-                    "bush_id",
-                    None,
+            matching_store_id = await self.session.scalar(
+                select(Store.id)
+                .where(
+                    Store.id.in_(target_access.store_ids),
+                    Store.bush_id.in_(actor_access.bush_ids),
                 )
-                in actor_access.bush_ids
-            ):
+                .limit(1)
+            )
+            if matching_store_id is not None:
                 return
 
         raise AccessDeniedError(
