@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.database.models.enums import StoreStatus
+from app.database.models.enums import StoreStatus, UserRole, UserStatus
 from app.repositories.schedule import ScheduleRepository
+from app.services.closing_service import ClosingService
+from app.services.opening_service import OpeningService
 
 
 class FakeScalarResult:
@@ -82,3 +84,66 @@ async def test_deadline_store_queries_do_not_scale_with_store_count(
     assert len(result) == store_count
     assert all(getattr(schedule, required_attribute) for _, schedule in result)
     assert session.scalars.await_count == 6
+
+
+class FakeRows:
+    def __init__(self, rows: list[tuple[int, object]]) -> None:
+        self.rows = rows
+
+    def all(self) -> list[tuple[int, object]]:
+        return self.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_count", [50, 85])
+@pytest.mark.parametrize("service_class", [OpeningService, ClosingService])
+async def test_alert_recipients_are_loaded_in_two_queries_for_store_batch(
+    store_count: int,
+    service_class: type[OpeningService] | type[ClosingService],
+) -> None:
+    stores = [
+        SimpleNamespace(
+            id=store_id,
+            bush_id=(store_id % 6) + 1,
+        )
+        for store_id in range(1, store_count + 1)
+    ]
+    bush_users = [
+        SimpleNamespace(
+            id=100 + bush_id,
+            role=UserRole.LION,
+            status=UserStatus.ACTIVE,
+            is_blocked=False,
+        )
+        for bush_id in range(1, 7)
+    ]
+    root_admin = SimpleNamespace(
+        id=1,
+        role=UserRole.ROOT_ADMIN,
+        status=UserStatus.ACTIVE,
+        is_blocked=False,
+    )
+
+    session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=FakeRows([
+                (user.id - 100, user)
+                for user in bush_users
+            ])
+        ),
+        scalars=AsyncMock(
+            return_value=FakeScalarResult([root_admin])
+        ),
+    )
+    service = object.__new__(service_class)
+    service.session = session
+
+    result = await service.get_alert_recipients_for_stores(stores)
+
+    assert len(result) == store_count
+    assert all(
+        {user.id for user in recipients} == {1, (store_id % 6) + 101}
+        for store_id, recipients in result.items()
+    )
+    session.execute.assert_awaited_once()
+    session.scalars.assert_awaited_once()
