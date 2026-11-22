@@ -886,13 +886,7 @@ class OpeningService:
         ):
             changed_bush_ids = {
                 store.bush_id
-                for store in await self.load_stores(
-                    {
-                        checkin.store_id
-                        for checkin
-                        in missed_checkins
-                    }
-                )
+                for store in missed_stores
                 if store.bush_id is not None
             }
 
