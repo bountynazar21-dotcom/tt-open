@@ -850,6 +850,71 @@ async def test_bulk_store_assignment_preloads_users_and_bindings(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_repository_set_many_preloads_all_setting_rows() -> None:
+    settings = {
+        "setting_1": SimpleNamespace(key="setting_1"),
+        "setting_2": SimpleNamespace(key="setting_2"),
+    }
+    repository = object.__new__(SystemSettingRepository)
+    repository.get_by_keys_for_update = AsyncMock(
+        return_value=dict(settings)
+    )
+    repository.normalize_key = lambda value: str(value).strip().lower()
+    repository.set_value = AsyncMock(
+        side_effect=lambda **kwargs: SimpleNamespace(
+            setting=(
+                kwargs["_preloaded_setting"]
+                or SimpleNamespace(key=kwargs["key"])
+            )
+        )
+    )
+
+    results = await repository.set_many(
+        {"setting_1": 10, "setting_2": 20},
+        updated_by_id=99,
+    )
+
+    assert len(results) == 2
+    repository.get_by_keys_for_update.assert_awaited_once_with(
+        ["setting_1", "setting_2"]
+    )
+    assert repository.set_value.await_count == 2
+    assert all(
+        call.kwargs["_setting_preloaded"] is True
+        for call in repository.set_value.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_default_settings_preloads_all_defaults_once() -> None:
+    repository = object.__new__(SystemSettingRepository)
+    repository.get_by_keys_for_update = AsyncMock(return_value={})
+    repository.normalize_key = lambda value: str(value).strip().lower()
+    repository.set_value = AsyncMock(
+        side_effect=lambda **kwargs: SimpleNamespace(
+            was_created=True,
+            setting=SimpleNamespace(key=kwargs["key"]),
+        )
+    )
+
+    created = await repository.create_default_settings(
+        created_by_id=99
+    )
+
+    assert len(created) == len(repository.DEFAULT_SETTINGS)
+    repository.get_by_keys_for_update.assert_awaited_once_with(
+        [definition.key for definition in repository.DEFAULT_SETTINGS]
+    )
+    assert repository.set_value.await_count == len(
+        repository.DEFAULT_SETTINGS
+    )
+    assert all(
+        call.kwargs["_setting_preloaded"] is True
+        for call in repository.set_value.await_args_list
+    )
+
+
 async def test_get_by_keys_for_update_uses_one_query() -> None:
     settings = [
         SimpleNamespace(key=f"setting_{index}")
