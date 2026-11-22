@@ -87,6 +87,7 @@ class BindingRepository:
         *,
         user_id: int,
         store_id: int,
+        active_only: bool = False,
         for_update: bool = False,
     ) -> UserStoreBinding | None:
         """Повертає прив’язку користувача до ТТ."""
@@ -104,7 +105,13 @@ class BindingRepository:
             .where(
                 UserStoreBinding.user_id == user_id,
                 UserStoreBinding.store_id == store_id,
+                *(
+                    [UserStoreBinding.status == BindingStatus.APPROVED]
+                    if active_only
+                    else []
+                ),
             )
+            .order_by(UserStoreBinding.id.asc())
             .limit(1)
         )
 
@@ -883,12 +890,25 @@ class BindingRepository:
         *,
         user_id: int,
         bush_id: int,
-        role: UserRole,
+        role: UserRole | None = None,
+        active_only: bool = False,
         for_update: bool = False,
     ) -> UserBushBinding | None:
         """Повертає управлінську прив’язку до куща."""
 
-        self.validate_bush_role(role)
+        if role is not None:
+            self.validate_bush_role(role)
+
+        conditions = [
+            UserBushBinding.user_id == user_id,
+            UserBushBinding.bush_id == bush_id,
+        ]
+        if role is not None:
+            conditions.append(UserBushBinding.role == role)
+        if active_only:
+            conditions.append(
+                UserBushBinding.status == BindingStatus.APPROVED
+            )
 
         statement = (
             select(UserBushBinding)
@@ -900,11 +920,8 @@ class BindingRepository:
                     UserBushBinding.bush
                 ),
             )
-            .where(
-                UserBushBinding.user_id == user_id,
-                UserBushBinding.bush_id == bush_id,
-                UserBushBinding.role == role,
-            )
+            .where(*conditions)
+            .order_by(UserBushBinding.id.asc())
             .limit(1)
         )
 
