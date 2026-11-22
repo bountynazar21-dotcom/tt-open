@@ -866,11 +866,11 @@ async def load_lion_stores(
 
     if direct_store_ids:
         repositories = data.get("repositories")
-    session = (
-        data.get("session")
-        or data.get("db_session")
-        or getattr(repositories, "session", None)
-    )
+        session = (
+            data.get("session")
+            or data.get("db_session")
+            or getattr(repositories, "session", None)
+        )
         direct_stores: list[Any] = []
 
         if session is not None:
