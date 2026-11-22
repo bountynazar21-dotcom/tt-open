@@ -445,6 +445,12 @@ class NotificationRepository(
             if topic_id is not None:
                 dedupe_key = f"{dedupe_key}:topic-{topic_id}"
             dedupe_key = self.normalize_dedupe_key(dedupe_key)
+            scheduled_for = item.get("scheduled_for")
+            if scheduled_for is not None:
+                self.validate_aware_datetime(
+                    scheduled_for,
+                    field_name="scheduled_for",
+                )
             ordered_keys.append(dedupe_key)
 
             if dedupe_key in pending_by_key:
