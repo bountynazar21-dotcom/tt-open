@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.database.models.enums import ClosingStatus, OpeningStatus, StoreStatus, UserRole, UserStatus
+from app.database.models.daily_summary import DailySummaryMessage
+from app.database.models.enums import SummaryType
+from app.repositories.daily_summary import DailySummaryRepository
 from app.repositories.closing import ClosingRepository
 from app.repositories.opening import OpeningRepository
 from app.repositories.schedule import ScheduleRepository
@@ -355,3 +358,52 @@ async def test_closing_summary_data_for_all_bushes_uses_one_query(
         for row in rows
     )
     session.execute.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+async def test_prepare_many_summaries_uses_one_locked_read_for_six_bushes() -> None:
+    business_date = date(2026, 11, 23)
+    summaries = [
+        DailySummaryMessage.create_pending(
+            summary_type=SummaryType.BUSH_CLOSING,
+            business_date=business_date,
+            chat_id=-1000 - bush_id,
+            bush_id=bush_id,
+            topic_id=20 + bush_id,
+        )
+        for bush_id in range(1, 7)
+    ]
+    for index, summary in enumerate(summaries, start=1):
+        summary.message_id = 1000 + index
+        summary.content_hash = DailySummaryRepository.build_content_hash("previous")
+
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(summaries)),
+        add=Mock(),
+        flush=AsyncMock(),
+    )
+    repository = object.__new__(DailySummaryRepository)
+    repository.session = session
+
+    decisions = await repository.prepare_updates_many(
+        summary_type=SummaryType.BUSH_CLOSING,
+        business_date=business_date,
+        items=[
+            {
+                "chat_id": -1000 - bush_id,
+                "bush_id": bush_id,
+                "topic_id": 20 + bush_id,
+                "message_text": f"updated summary {bush_id}",
+                "snapshot_json": {"bush_id": bush_id},
+            }
+            for bush_id in range(1, 7)
+        ],
+    )
+
+    assert len(decisions) == 6
+    assert all(decision.should_edit for decision in decisions)
+    assert not any(decision.should_send for decision in decisions)
+    assert session.scalars.await_count == 1
+    assert session.flush.await_count == 1
+    assert session.add.call_count == 6
