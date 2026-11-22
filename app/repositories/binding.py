@@ -1278,6 +1278,35 @@ class BindingRepository:
             result.unique().all()
         )
 
+    async def get_user_bush_ids(
+        self,
+        *,
+        user_id: int,
+        roles: set[UserRole] | None = None,
+    ) -> set[int]:
+        """Returns all bushes accessible to a user in one query."""
+        allowed_roles = roles or {
+            UserRole.BUSH_ADMIN,
+            UserRole.LION,
+        }
+        for role in allowed_roles:
+            self.validate_bush_role(role)
+
+        result = await self.session.scalars(
+            select(UserBushBinding.bush_id)
+            .where(
+                UserBushBinding.user_id == user_id,
+                UserBushBinding.role.in_(allowed_roles),
+                UserBushBinding.status == BindingStatus.APPROVED,
+            )
+            .distinct()
+        )
+        return {
+            int(bush_id)
+            for bush_id in result.all()
+            if bush_id is not None
+        }
+
     async def user_has_bush_access(
         self,
         *,
