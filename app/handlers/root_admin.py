@@ -641,7 +641,12 @@ async def query_all_stores(
     )
 
     if direct_ids:
-        session = data.get("session") or data.get("db_session")
+        repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
         if session is not None:
             from sqlalchemy import select
             from app.database.models.store import Store
@@ -826,7 +831,12 @@ async def _prime_director_bush_cache(
         data["_director_bush_cache_ready"] = True
         return
 
-    session = data.get("session") or data.get("db_session")
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
     if session is None:
         return
 
@@ -1278,7 +1288,12 @@ async def count_bush_stores_many(
     if not bush_ids:
         return {}
 
-    session = data.get("session") or data.get("db_session")
+    repositories = data.get("repositories")
+    session = (
+        data.get("session")
+        or data.get("db_session")
+        or getattr(repositories, "session", None)
+    )
     if session is None:
         return {
             bush_id: await count_bush_stores(
