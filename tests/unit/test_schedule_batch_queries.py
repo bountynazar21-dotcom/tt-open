@@ -609,6 +609,115 @@ async def test_store_bindings_for_many_users_use_one_query() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("user_count", [50, 85])
+
+@pytest.mark.asyncio
+async def test_bush_bindings_for_many_users_use_one_query() -> None:
+    bindings = [
+        SimpleNamespace(id=user_id, user_id=user_id, bush_id=8, role=UserRole.LION)
+        for user_id in range(1, 86)
+    ]
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(bindings))
+    )
+    repository = object.__new__(BindingRepository)
+    repository.session = session
+
+    result = await repository.get_bush_bindings_for_users(
+        user_ids=set(range(1, 86)),
+        bush_id=8,
+        role=UserRole.LION,
+        for_update=True,
+    )
+
+    assert len(result) == 85
+    assert result[42].bush_id == 8
+    session.scalars.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_count", [50, 85])
+async def test_bulk_bush_assignment_preloads_users_and_bindings(
+    user_count: int,
+) -> None:
+    users = [
+        SimpleNamespace(id=user_id)
+        for user_id in range(1, user_count + 1)
+    ]
+    bindings_by_user = {
+        user.id: SimpleNamespace(
+            id=user.id,
+            user_id=user.id,
+            bush_id=8,
+            role=UserRole.BUSH_ADMIN,
+        )
+        for user in users
+    }
+    access = SimpleNamespace(
+        can_manage_bush=AsyncMock(
+            return_value=SimpleNamespace(
+                raise_if_denied=Mock(return_value=None)
+            )
+        )
+    )
+    bindings_repo = SimpleNamespace(
+        get_bush_bindings_for_users=AsyncMock(
+            return_value=bindings_by_user
+        )
+    )
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=FakeScalarResult(users))
+    )
+    service = object.__new__(BindingService)
+    service.session = session
+    service.access = access
+    service.repositories = SimpleNamespace(bindings=bindings_repo)
+    service.get_bush_or_raise = AsyncMock(
+        return_value=SimpleNamespace(id=8)
+    )
+    service.assign_bush = AsyncMock(
+        side_effect=[
+            SimpleNamespace(
+                was_created=False,
+                was_changed=True,
+                binding=SimpleNamespace(id=user.id),
+            )
+            for user in users
+        ]
+    )
+
+    result = await service.bulk_assign_bush(
+        actor=SimpleNamespace(id=99),
+        user_ids=[user.id for user in users],
+        bush_id=8,
+        role=UserRole.BUSH_ADMIN,
+        reason="bulk bush assignment test",
+    )
+
+    assert result.total_count == user_count
+    assert result.success_count == user_count
+    access.can_manage_bush.assert_awaited_once_with(
+        service.assign_bush.await_args.kwargs["actor"],
+        8,
+    )
+    session.scalars.assert_awaited_once()
+    bindings_repo.get_bush_bindings_for_users.assert_awaited_once_with(
+        user_ids=set(range(1, user_count + 1)),
+        bush_id=8,
+        role=UserRole.BUSH_ADMIN,
+        for_update=True,
+    )
+    assert service.assign_bush.await_count == user_count
+    for call, user in zip(
+        service.assign_bush.await_args_list,
+        users,
+        strict=True,
+    ):
+        assert call.kwargs["_preloaded_user"] is user
+        assert call.kwargs["_preloaded_binding"] is bindings_by_user[user.id]
+        assert call.kwargs["_preloaded_binding_loaded"] is True
+        assert call.kwargs["_bush_access_prevalidated"] is True
+
+
 async def test_bulk_store_assignment_preloads_users_and_bindings(
     user_count: int,
 ) -> None:
