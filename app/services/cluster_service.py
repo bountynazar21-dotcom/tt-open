@@ -21,6 +21,7 @@ from app.database.models.cluster import Cluster
 from app.database.models.enums import (
     AuditAction,
     EntityType,
+    UserRole,
 )
 from app.database.models.store import Store
 from app.database.models.user import User
@@ -972,6 +973,7 @@ class ClusterService:
         changed_at: datetime | None = None,
         _preloaded_store: Store | None = None,
         _cluster_prevalidated: bool = False,
+        _manageable_bush_ids: set[int] | None = None,
     ) -> ClusterStoreAssignmentResult:
         """
         Призначає ТТ у кластер.
@@ -1015,6 +1017,7 @@ class ClusterService:
                 actor,
                 store.id,
                 store=store,
+                manageable_bush_ids=_manageable_bush_ids,
             )
         )
 
@@ -1170,6 +1173,19 @@ class ClusterService:
             for store in stores_result.unique().all()
         }
 
+        manageable_bush_ids: set[int] | None = None
+        if (
+            getattr(actor, "role", None) == UserRole.BUSH_ADMIN
+            and self.access.is_active_user(actor)
+            and not self.access.is_global_manager(actor)
+        ):
+            manageable_bush_ids = (
+                await self.repositories.bindings.get_user_bush_ids(
+                    user_id=actor.id,
+                    roles={UserRole.BUSH_ADMIN},
+                )
+            )
+
         for store_id in normalized_ids:
             try:
                 store = stores_by_id.get(store_id)
@@ -1186,6 +1202,7 @@ class ClusterService:
                     changed_at=now,
                     _preloaded_store=store,
                     _cluster_prevalidated=True,
+                    _manageable_bush_ids=manageable_bush_ids,
                 )
 
                 items.append(
