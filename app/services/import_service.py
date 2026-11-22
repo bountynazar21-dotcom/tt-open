@@ -1693,12 +1693,17 @@ class ImportService:
         )
         schedule_deadline_minutes = None
         if has_imported_schedule:
-            schedule_deadline_minutes = (
-                await self.repositories.settings
-                .get_opening_deadline_minutes(),
-                await self.repositories.settings
-                .get_closing_deadline_minutes(),
-            )
+            try:
+                schedule_deadline_minutes = (
+                    await self.repositories.settings
+                    .get_opening_deadline_minutes(),
+                    await self.repositories.settings
+                    .get_closing_deadline_minutes(),
+                )
+            except Exception:
+                # Keep the established per-row failure/partial-import behavior
+                # if shared setting preload fails; each row retries as before.
+                schedule_deadline_minutes = None
 
         for row in actionable_rows:
             try:
