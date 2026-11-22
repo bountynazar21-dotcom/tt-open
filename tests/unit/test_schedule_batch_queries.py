@@ -108,6 +108,14 @@ class FakeRows:
         return self.rows
 
 
+class FakeNested:
+    async def __aenter__(self) -> FakeNested:
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool:
+        return False
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("store_count", [50, 85])
 @pytest.mark.parametrize("service_class", [OpeningService, ClosingService])
@@ -1089,3 +1097,80 @@ async def test_bindings_keyboard_target_maps_load_each_scope_in_one_query(
     assert set(bush_map) == {3}
     session.scalars.assert_awaited_once()
     query_bushes.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_count", [50, 85])
+async def test_opening_missing_records_check_all_dates_in_one_query(
+    store_count: int,
+) -> None:
+    dates = [
+        date(2026, 11, 23) + __import__("datetime").timedelta(days=offset)
+        for offset in range(7)
+    ]
+    plans = [
+        SimpleNamespace(
+            store_id=store_id,
+            business_date=business_date,
+            scheduled_open_time=time(9, 0),
+            control_deadline=time(9, 10),
+        )
+        for business_date in dates
+        for store_id in range(1, store_count + 1)
+    ]
+    session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=FakeRows([(dates[0], 1)])
+        ),
+        begin_nested=Mock(return_value=FakeNested()),
+        add_all=Mock(),
+        flush=AsyncMock(),
+    )
+    repository = object.__new__(OpeningRepository)
+    repository.session = session
+
+    result = await repository.create_missing_records(plans)
+
+    assert len(result) == store_count * 7 - 1
+    session.execute.assert_awaited_once()
+    session.add_all.assert_called_once()
+    session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_count", [50, 85])
+async def test_closing_missing_records_check_all_dates_in_one_query(
+    store_count: int,
+) -> None:
+    dates = [
+        date(2026, 11, 23) + __import__("datetime").timedelta(days=offset)
+        for offset in range(7)
+    ]
+    plans = [
+        SimpleNamespace(
+            store_id=store_id,
+            business_date=business_date,
+            scheduled_close_time=time(21, 0),
+            control_deadline=time(21, 10),
+        )
+        for business_date in dates
+        for store_id in range(1, store_count + 1)
+    ]
+    session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=FakeRows([(dates[0], 1)])
+        ),
+        begin_nested=Mock(return_value=FakeNested()),
+        add_all=Mock(),
+        flush=AsyncMock(),
+    )
+    repository = object.__new__(ClosingRepository)
+    repository.session = session
+
+    result = await repository.create_missing_records(plans)
+
+    assert len(result) == store_count * 7 - 1
+    session.execute.assert_awaited_once()
+    session.add_all.assert_called_once()
+    session.flush.assert_awaited_once()
