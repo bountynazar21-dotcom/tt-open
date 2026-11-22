@@ -900,7 +900,7 @@ class UserService:
             )
             bushes.sort(
                 key=lambda bush: (
-                    self.bush_name(bush),
+                    self.bush_name(bush).lower(),
                     bush.id,
                 )
             )
